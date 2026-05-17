@@ -1,0 +1,50 @@
+# 依赖目录：由 package manager 还原，避免提交大量第三方文件
+node_modules/
+
+# 构建与打包产物：Vite/TypeScript 构建输出应由 CI 或本地重新生成
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 测试与覆盖率产物：结果可复现，不进入版本库
+coverage/
+.vitest/
+
+# 本地环境变量：可能包含密钥，仅保留示例文件用于说明配置项
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# 日志与运行时临时文件
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 缓存目录：不同工具会按需重建
+.cache/
+.parcel-cache/
+.vite/
+.turbo/
+
+# 编辑器本地配置：保留团队共享的推荐配置文件
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 包管理器本地状态
+.npm/
+.pnpm-store/
