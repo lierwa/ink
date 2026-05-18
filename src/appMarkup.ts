@@ -29,6 +29,12 @@ export function createAppMarkup(initialTransform: TattooTransform): string {
 
       <aside class="control-panel" aria-label="Tattoo controls">
         <div class="control-group">
+          <label>
+            <span>Depth model (takes effect on Apply Body)</span>
+            <select id="depthModel">
+              <option value="">Loading models from public/...</option>
+            </select>
+          </label>
           <label class="file-drop">
             <span>Upload body photo</span>
             <input id="bodyUpload" type="file" accept="image/png,image/jpeg,image/webp" />
@@ -40,6 +46,11 @@ export function createAppMarkup(initialTransform: TattooTransform): string {
           <label class="toggle-line">
             <input id="debugMesh" type="checkbox" />
             <span>Show body mesh</span>
+          </label>
+          <label>
+            <span>Surface intensity</span>
+            <input id="surfaceIntensity" type="range" min="0" max="2" step="0.01" value="1.4" />
+            <output id="surfaceIntensityValue">140%</output>
           </label>
         </div>
 

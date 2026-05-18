@@ -12,6 +12,7 @@ const createFabricTattooController = vi.fn(async () => ({
 const renderer = {
   canvas: document.createElement("canvas"),
   setBodySurface: vi.fn(),
+  setSurfaceIntensity: vi.fn(),
   setTattoo: vi.fn(),
   clearTattoo: vi.fn(),
   setDebugMeshVisible: vi.fn(),
@@ -109,6 +110,12 @@ function installCanvasContextStub(): void {
       fill: vi.fn(),
       beginPath: vi.fn(),
       ellipse: vi.fn(),
+      createImageData: vi.fn((width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+      })),
+      putImageData: vi.fn(),
       fillText: vi.fn((text: string) => {
         canvasTextCalls.push(text);
       }),

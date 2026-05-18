@@ -72,6 +72,9 @@ export interface SkinMaskProcessOptions {
   morphology?: SkinMorphologyOptions;
   minComponentArea?: number;
   keepLargestComponent?: boolean;
+  retainNearbyComponents?: boolean;
+  nearbyComponentMinAreaRatio?: number;
+  nearbyComponentMaxDistance?: number;
 }
 
 export interface SkinContourResampleOptions {
@@ -123,5 +126,18 @@ export interface BodyMeshPipelineParams {
 export interface SkinMeshData {
   positions: Float32Array;
   indices: Uint32Array;
+  uvs?: Float32Array;
   boundaryFlags?: Uint8Array;
+}
+
+export interface SurfaceFieldData {
+  width: number;
+  height: number;
+  normalRgba: Uint8ClampedArray;
+}
+
+export interface DepthFieldData {
+  width: number;
+  height: number;
+  depth: Float32Array;
 }

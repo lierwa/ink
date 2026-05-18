@@ -12,6 +12,9 @@ interface NormalizedSkinMaskProcessOptions {
   morphology: NormalizedMorphologyOptions;
   minComponentArea: number;
   keepLargestComponent: boolean;
+  retainNearbyComponents: boolean;
+  nearbyComponentMinAreaRatio: number;
+  nearbyComponentMaxDistance: number;
 }
 
 const defaultOptions: NormalizedSkinMaskProcessOptions = {
@@ -24,6 +27,9 @@ const defaultOptions: NormalizedSkinMaskProcessOptions = {
   },
   minComponentArea: 32,
   keepLargestComponent: true,
+  retainNearbyComponents: false,
+  nearbyComponentMinAreaRatio: 0.16,
+  nearbyComponentMaxDistance: 18,
 };
 
 export function postProcessSkinMask(
@@ -37,7 +43,7 @@ export function postProcessSkinMask(
     ? applyMorphology(thresholded, normalized.morphology)
     : thresholded;
 
-  return removeSmallComponents(morphed, normalized.minComponentArea, normalized.keepLargestComponent);
+  return removeSmallComponents(morphed, normalized);
 }
 
 function validateMask(mask: SkinMask): void {
@@ -65,6 +71,9 @@ function normalizeOptions(options?: SkinMaskProcessOptions): NormalizedSkinMaskP
       closeIterations: normalizeIteration(mergedMorphology.closeIterations),
     },
     keepLargestComponent: options?.keepLargestComponent ?? defaultOptions.keepLargestComponent,
+    retainNearbyComponents: options?.retainNearbyComponents ?? defaultOptions.retainNearbyComponents,
+    nearbyComponentMinAreaRatio: clamp(options?.nearbyComponentMinAreaRatio ?? defaultOptions.nearbyComponentMinAreaRatio, 0, 1),
+    nearbyComponentMaxDistance: Math.max(0, options?.nearbyComponentMaxDistance ?? defaultOptions.nearbyComponentMaxDistance),
   };
 }
 
@@ -146,9 +155,13 @@ function dilateBinary(data: Uint8Array, width: number, height: number, kernelSiz
 interface Component {
   size: number;
   indices: number[];
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
-function removeSmallComponents(mask: BinaryMask, minArea: number, keepLargest: boolean): BinaryMask {
+function removeSmallComponents(mask: BinaryMask, options: NormalizedSkinMaskProcessOptions): BinaryMask {
   const components = collectComponents(mask.data, mask.width, mask.height);
   if (components.length === 0) {
     return mask;
@@ -156,11 +169,33 @@ function removeSmallComponents(mask: BinaryMask, minArea: number, keepLargest: b
 
   const output = new Uint8Array(mask.data.length);
   const largest = findLargestComponent(components);
+  const largestMinX = largest.minX;
+  const largestMinY = largest.minY;
+  const largestMaxX = largest.maxX;
+  const largestMaxY = largest.maxY;
 
   for (const component of components) {
-    const keepByLargest = keepLargest ? component === largest : true;
-    const keepByArea = component.size >= minArea;
-    if (!keepByLargest || !keepByArea) {
+    const keepByArea = component.size >= options.minComponentArea;
+    if (!keepByArea) {
+      continue;
+    }
+    const keepAsLargest = !options.keepLargestComponent || component === largest;
+    const keepAsNearby =
+      options.keepLargestComponent &&
+      options.retainNearbyComponents &&
+      component !== largest &&
+      component.size >= largest.size * options.nearbyComponentMinAreaRatio &&
+      distanceBetweenComponentBounds(
+        component,
+        largestMinX,
+        largestMinY,
+        largestMaxX,
+        largestMaxY,
+      ) <= options.nearbyComponentMaxDistance;
+
+    // WHY: 主连通域之外保留“面积足够且距离足够近”的次连通域，能显著降低脖子/锁骨被误裁掉的问题。
+    // TRADE-OFF: 会引入少量邻近误检区域，但相比直接丢失颈部覆盖更可接受。
+    if (!keepAsLargest && !keepAsNearby) {
       continue;
     }
 
@@ -184,6 +219,10 @@ function collectComponents(data: Uint8Array, width: number, height: number): Com
     const stack = [index];
     const indices: number[] = [];
     visited[index] = 1;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
 
     // WHY: 4 邻域避免对角线误连通，边界会更稳；TRADE-OFF: 对斜向细桥接更保守，可能切断极细连接。
     while (stack.length > 0) {
@@ -195,6 +234,10 @@ function collectComponents(data: Uint8Array, width: number, height: number): Com
       indices.push(current);
       const x = current % width;
       const y = Math.floor(current / width);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
 
       pushNeighbor(data, visited, stack, x - 1, y, width, height);
       pushNeighbor(data, visited, stack, x + 1, y, width, height);
@@ -202,7 +245,14 @@ function collectComponents(data: Uint8Array, width: number, height: number): Com
       pushNeighbor(data, visited, stack, x, y + 1, width, height);
     }
 
-    components.push({ size: indices.length, indices });
+    components.push({
+      size: indices.length,
+      indices,
+      minX,
+      minY,
+      maxX,
+      maxY,
+    });
   }
 
   return components;
@@ -238,6 +288,28 @@ function findLargestComponent(components: Component[]): Component {
   }
 
   return largest;
+}
+
+function distanceBetweenComponentBounds(
+  component: Component,
+  targetMinX: number,
+  targetMinY: number,
+  targetMaxX: number,
+  targetMaxY: number,
+): number {
+  const dx = intervalDistance(component.minX, component.maxX, targetMinX, targetMaxX);
+  const dy = intervalDistance(component.minY, component.maxY, targetMinY, targetMaxY);
+  return Math.hypot(dx, dy);
+}
+
+function intervalDistance(aMin: number, aMax: number, bMin: number, bMax: number): number {
+  if (aMax < bMin) {
+    return bMin - aMax;
+  }
+  if (bMax < aMin) {
+    return aMin - bMax;
+  }
+  return 0;
 }
 
 function normalizeKernelSize(value: number | undefined): number {

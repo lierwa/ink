@@ -23,6 +23,9 @@ const defaultMaskProcess: SkinMaskProcessOptions = {
   threshold: 0.55,
   minComponentArea: 64,
   keepLargestComponent: true,
+  retainNearbyComponents: true,
+  nearbyComponentMinAreaRatio: 0.12,
+  nearbyComponentMaxDistance: 26,
   morphology: {
     enabled: true,
     kernelSize: 3,
@@ -80,6 +83,9 @@ export function createSkinMeshPipelineOptionsFromBodyParams(
     maskProcess: {
       threshold: clamp(params.threshold, 0.05, 0.95),
       keepLargestComponent: true,
+      retainNearbyComponents: true,
+      nearbyComponentMinAreaRatio: 0.12,
+      nearbyComponentMaxDistance: 26,
       minComponentArea: 48,
       morphology: {
         enabled: morphStrength > 0,

@@ -78,4 +78,32 @@ describe("postProcessSkinMask", () => {
     expect(count).toBe(clusterA.length);
     expect(result.data[4 * 10 + 6]).toBe(0);
   });
+
+  test("keeps nearby secondary components for neck continuity when enabled", () => {
+    const torso: Array<[number, number]> = [];
+    for (let y = 2; y <= 5; y += 1) {
+      for (let x = 2; x <= 5; x += 1) {
+        torso.push([x, y]);
+      }
+    }
+    const neck: Array<[number, number]> = [
+      [7, 3], [7, 4], [8, 3], [8, 4],
+    ];
+    const farNoise: Array<[number, number]> = [
+      [14, 1], [15, 1], [14, 2], [15, 2],
+    ];
+    const mask = createSkinMask(18, 10, [...torso, ...neck, ...farNoise]);
+
+    const result = postProcessSkinMask(mask, {
+      minComponentArea: 1,
+      keepLargestComponent: true,
+      retainNearbyComponents: true,
+      nearbyComponentMinAreaRatio: 0.1,
+      nearbyComponentMaxDistance: 3,
+      morphology: { enabled: false },
+    });
+
+    expect(result.data[3 * 18 + 7]).toBe(1);
+    expect(result.data[1 * 18 + 14]).toBe(0);
+  });
 });

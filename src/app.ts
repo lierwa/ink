@@ -14,8 +14,20 @@ import {
   createSkinMeshPipelineOptionsFromBodyParams,
   defaultBodyMeshPipelineParams,
 } from "./domain/skinMeshPipeline";
+import { buildSurfaceFieldFromSkinMask } from "./domain/surfaceField";
+import {
+  createDepthFieldEstimator,
+  fallbackDepthModelUrl,
+  type DepthFieldEstimator,
+} from "./domain/depthEstimator";
+import {
+  discoverDepthModelOptions,
+  resolvePreferredDepthModel,
+  type DepthModelOption,
+} from "./domain/depthModelCatalog";
 import { segmentSkinFromImageSource } from "./domain/skinSegmentation";
 import { createSkinMaskFromCanvasAlpha } from "./image/skinMaskAdapter";
+import { createFlatSurfaceNormalTexture, createSurfaceNormalTexture } from "./image/surfaceNormalTexture";
 import { meshResolution, sphere, stageSize } from "./sphereConfig";
 import { buildSphereMesh } from "./domain/sphereMesh";
 import { openBodyUploadModal } from "./editor/bodyUploadModal";
@@ -35,9 +47,11 @@ const initialTransform: TattooTransform = {
   rotation: -0.18,
   opacity: 0.84,
 };
+const defaultSurfaceIntensity = 1.4;
 
 interface BodySurfaceState {
   texture: Texture;
+  surfaceNormalTexture: Texture | null;
   placementRect: Rect;
   sourceSize: Size;
   mask: SkinMask;
@@ -62,9 +76,12 @@ interface AppState {
 interface AppElements {
   pixiLayer: HTMLDivElement;
   fabricLayer: HTMLCanvasElement;
+  depthModelSelect: HTMLSelectElement;
   bodyUploadInput: HTMLInputElement;
   tattooUploadInput: HTMLInputElement;
   debugMeshInput: HTMLInputElement;
+  surfaceIntensityInput: HTMLInputElement;
+  surfaceIntensityValue: HTMLOutputElement;
   opacityInput: HTMLInputElement;
   paramX: HTMLInputElement;
   paramY: HTMLInputElement;
@@ -80,8 +97,14 @@ type SetTattooTransform = (transform: TattooTransform, source: "fabric" | "panel
 
 export async function startApp(): Promise<void> {
   const elements = initializeAppShell();
+  const depthModelOptions = await initializeDepthModelOptions(elements);
+  const preferredDepthModel = resolvePreferredDepthModel(depthModelOptions);
+  let activeDepthModelLabel = preferredDepthModel?.label ?? "fallback model";
   const defaultBodyCanvas = createDefaultBodyCanvas();
   const state = initializeAppState(defaultBodyCanvas);
+  let depthEstimator = createDepthFieldEstimator({
+    modelUrl: preferredDepthModel?.url ?? fallbackDepthModelUrl,
+  });
 
   const pixi = await createPixiTattooRenderer({
     mount: elements.pixiLayer,
@@ -118,7 +141,12 @@ export async function startApp(): Promise<void> {
     renderTattoo: () => renderTattoo(state, pixi),
     syncPanelFromTransform: () => syncPanelFromTransform(state, elements),
   });
-  installBodyUploadWorkflow(state, elements, pixi, setTransform);
+  installDepthModelControl(elements, depthModelOptions, (next, label) => {
+    depthEstimator = next;
+    activeDepthModelLabel = label;
+  });
+  installSurfaceIntensityControl(elements, pixi);
+  installBodyUploadWorkflow(state, elements, pixi, setTransform, () => depthEstimator, () => activeDepthModelLabel);
   installDebugAndResetControls(elements, pixi, fabric, setTransform);
 
   void pixi.canvas;
@@ -140,9 +168,12 @@ function getAppElements(): AppElements {
   return {
     pixiLayer: getElement<HTMLDivElement>("pixiLayer"),
     fabricLayer: getElement<HTMLCanvasElement>("fabricLayer"),
+    depthModelSelect: getElement<HTMLSelectElement>("depthModel"),
     bodyUploadInput: getElement<HTMLInputElement>("bodyUpload"),
     tattooUploadInput: getElement<HTMLInputElement>("tattooUpload"),
     debugMeshInput: getElement<HTMLInputElement>("debugMesh"),
+    surfaceIntensityInput: getElement<HTMLInputElement>("surfaceIntensity"),
+    surfaceIntensityValue: getElement<HTMLOutputElement>("surfaceIntensityValue"),
     opacityInput: getElement<HTMLInputElement>("opacity"),
     paramX: getElement<HTMLInputElement>("paramX"),
     paramY: getElement<HTMLInputElement>("paramY"),
@@ -167,6 +198,7 @@ function initializeAppState(
     transformRevision: 0,
     bodySurfaceState: {
       texture: Texture.from(defaultBodyCanvas),
+      surfaceNormalTexture: createFlatSurfaceNormalTexture(stageSize),
       placementRect: { x: 0, y: 0, width: stageSize.width, height: stageSize.height },
       sourceSize: { width: stageSize.width, height: stageSize.height },
       mask: defaultMask,
@@ -240,6 +272,8 @@ function installBodyUploadWorkflow(
   elements: AppElements,
   pixi: PixiTattooRenderer,
   setTransform: SetTattooTransform,
+  getDepthEstimator: () => DepthFieldEstimator,
+  getDepthModelLabel: () => string,
 ): void {
   let latestRequestToken = 0;
 
@@ -279,13 +313,16 @@ function installBodyUploadWorkflow(
           return;
         }
 
-        applyBodySurfaceResult(state, pixi, modalResult);
+        const surfaceSummary = await applyBodySurfaceResult(state, pixi, modalResult, getDepthEstimator());
         const centeredTransform = createBodyCenteredTattooTransform(state.bodySurfaceState.placementRect, state.tattooTransform.opacity);
 
         // WHY: Apply Body 后重置贴图中心，避免旧 body 的位置语义遗留到新 body 导致“贴图飞离人体”的错觉。
         // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
         setTransform(centeredTransform, "body-apply");
-        elements.statusLabel.textContent = "applied body mesh";
+        elements.statusLabel.textContent =
+          surfaceSummary.source === "onnx"
+            ? `applied body mesh (onnx depth: ${getDepthModelLabel()}, confidence ${Math.round(surfaceSummary.qualityScore * 100)}%)`
+            : `applied body mesh (fallback depth: ${surfaceSummary.warning ?? "luma"})`;
       } catch (error) {
         if (!isCurrentRequest()) {
           return;
@@ -297,7 +334,49 @@ function installBodyUploadWorkflow(
   });
 }
 
-function applyBodySurfaceResult(
+function installDepthModelControl(
+  elements: AppElements,
+  options: DepthModelOption[],
+  setEstimator: (estimator: DepthFieldEstimator, label: string) => void,
+): void {
+  const optionById = new Map(options.map((option) => [option.id, option]));
+
+  const rebuildEstimator = (): void => {
+    const selected = optionById.get(elements.depthModelSelect.value);
+    const modelUrl = selected?.url ?? fallbackDepthModelUrl;
+    const modelLabel = selected?.label ?? "fallback model";
+    setEstimator(createDepthFieldEstimator({ modelUrl }), modelLabel);
+
+    // WHY: 深度模型仅在 Apply Body 时参与法线重建；切换时即时提示“下次 Apply 生效”，避免把模型切换误解为实时变形。
+    // TRADE-OFF: 状态文案更长，但能显著降低“切了模型却没变化”的困惑。
+    elements.statusLabel.textContent = `depth model switched: ${modelLabel} (apply body to take effect)`;
+  };
+
+  elements.depthModelSelect.addEventListener("change", rebuildEstimator);
+}
+
+function installSurfaceIntensityControl(
+  elements: AppElements,
+  pixi: PixiTattooRenderer,
+): void {
+  const applyIntensity = (value: number): void => {
+    const clamped = clamp(value, 0, 2);
+    pixi.setSurfaceIntensity(clamped);
+    const percent = Math.round(clamped * 100);
+    elements.surfaceIntensityInput.value = clamped.toFixed(2);
+    elements.surfaceIntensityValue.value = `${percent}%`;
+    elements.surfaceIntensityValue.textContent = `${percent}%`;
+  };
+
+  // WHY: 曲面强度必须可实时调试，否则每次改算法参数都要重复上传与 Apply，反馈周期过长。
+  // TRADE-OFF: 暴露一个额外控件会增加少量 UI 复杂度，但能显著提升贴合调参与问题定位效率。
+  applyIntensity(Number(elements.surfaceIntensityInput.value) || defaultSurfaceIntensity);
+  elements.surfaceIntensityInput.addEventListener("input", () => {
+    applyIntensity(Number(elements.surfaceIntensityInput.value));
+  });
+}
+
+async function applyBodySurfaceResult(
   state: AppState,
   pixi: PixiTattooRenderer,
   result: {
@@ -308,7 +387,8 @@ function applyBodySurfaceResult(
       mesh: SkinMeshData;
     };
   },
-): void {
+  depthEstimator: DepthFieldEstimator,
+): Promise<{ source: "onnx" | "luma"; qualityScore: number; warning?: string }> {
   const placementRect = computeContainPlacementRect(
     { width: result.sourceCanvas.width, height: result.sourceCanvas.height },
     stageSize,
@@ -318,10 +398,30 @@ function applyBodySurfaceResult(
     { width: result.sourceCanvas.width, height: result.sourceCanvas.height },
     placementRect,
   );
+  const depthEstimate = await depthEstimator.estimate({
+    sourceCanvas: result.sourceCanvas,
+    stageSize,
+    placementRect,
+    mask: result.preview.mask,
+  });
+  const surfaceField = buildSurfaceFieldFromSkinMask({
+    mask: result.preview.mask,
+    stageSize,
+    placementRect,
+    depthField: depthEstimate.depthField,
+    options: {
+      depthBlendWeight: depthEstimate.source === "onnx" ? 0.98 : 0.78,
+      normalStrength: depthEstimate.source === "onnx"
+        ? 4.8 + depthEstimate.qualityScore * 1.6
+        : 2.1,
+      blurPasses: depthEstimate.source === "onnx" ? 0 : 2,
+    },
+  });
   const revision = state.bodySurfaceState.revision + 1;
 
   state.bodySurfaceState = {
     texture: Texture.from(result.sourceCanvas),
+    surfaceNormalTexture: createSurfaceNormalTexture(surfaceField),
     placementRect,
     sourceSize: { width: result.sourceCanvas.width, height: result.sourceCanvas.height },
     mask: result.preview.mask,
@@ -331,11 +431,17 @@ function applyBodySurfaceResult(
   };
 
   renderBodySurface(state, pixi);
+  return {
+    source: depthEstimate.source,
+    qualityScore: depthEstimate.qualityScore,
+    warning: depthEstimate.warning,
+  };
 }
 
 function renderBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
   const body: BodySurfaceRenderState = {
     texture: state.bodySurfaceState.texture,
+    surfaceNormalTexture: state.bodySurfaceState.surfaceNormalTexture,
     placementRect: state.bodySurfaceState.placementRect,
     mesh: state.bodySurfaceState.mesh,
   };
@@ -430,6 +536,31 @@ function getElement<T extends HTMLElement>(id: string): T {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+async function initializeDepthModelOptions(elements: AppElements): Promise<DepthModelOption[]> {
+  const options = await discoverDepthModelOptions();
+  const preferred = resolvePreferredDepthModel(options);
+  elements.depthModelSelect.replaceChildren();
+
+  for (const option of options) {
+    const domOption = document.createElement("option");
+    domOption.value = option.id;
+    domOption.textContent = option.label;
+    domOption.selected = option.id === preferred?.id;
+    elements.depthModelSelect.appendChild(domOption);
+  }
+
+  if (options.length === 0) {
+    const fallbackOption = document.createElement("option");
+    fallbackOption.value = "fallback-empty";
+    fallbackOption.textContent = "No model found under public/models. Using fallback URL.";
+    elements.depthModelSelect.appendChild(fallbackOption);
+  }
+
+  // WHY: 下拉项来自 public 目录扫描结果，避免硬编码模型清单与本地文件状态脱节。
+  // TRADE-OFF: 新下载模型需要刷新页面重新拉取索引，但实现简单且行为可预期。
+  return options;
 }
 
 const skinMeshMaxEdge = 1024;
@@ -599,6 +730,7 @@ function scaleMesh(mesh: SkinMeshData, scaleX: number, scaleY: number): SkinMesh
   return {
     positions,
     indices: new Uint32Array(mesh.indices),
+    uvs: mesh.uvs ? new Float32Array(mesh.uvs) : undefined,
     boundaryFlags: mesh.boundaryFlags ? new Uint8Array(mesh.boundaryFlags) : undefined,
   };
 }
@@ -618,6 +750,12 @@ function createRectangleMesh(sourceSize: Size, targetSize: Size): SkinMeshData {
       0,
       sourceSize.height * yScale,
     ]),
+    uvs: new Float32Array([
+      0, 0,
+      1, 0,
+      1, 1,
+      0, 1,
+    ]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     boundaryFlags: new Uint8Array([1, 1, 1, 1]),
   };
@@ -632,6 +770,7 @@ export function mapSkinMeshToPlacementRect(
     return {
       positions: new Float32Array(mesh.positions),
       indices: new Uint32Array(mesh.indices),
+      uvs: mesh.uvs ? new Float32Array(mesh.uvs) : undefined,
       boundaryFlags: mesh.boundaryFlags ? new Uint8Array(mesh.boundaryFlags) : undefined,
     };
   }
@@ -648,6 +787,7 @@ export function mapSkinMeshToPlacementRect(
   return {
     positions: mappedPositions,
     indices: new Uint32Array(mesh.indices),
+    uvs: mesh.uvs ? new Float32Array(mesh.uvs) : undefined,
     boundaryFlags: mesh.boundaryFlags ? new Uint8Array(mesh.boundaryFlags) : undefined,
   };
 }
