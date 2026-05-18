@@ -12,11 +12,14 @@ const createFabricTattooController = vi.fn(async () => ({
 const renderer = {
   canvas: document.createElement("canvas"),
   setBodySurface: vi.fn(),
+  setSurfaceNormalTexture: vi.fn(),
   setSurfaceIntensity: vi.fn(),
   setTattoo: vi.fn(),
   clearTattoo: vi.fn(),
   setDebugMeshVisible: vi.fn(),
   setSkinDebugMesh: vi.fn(),
+  setBodyAnalysisDebug: vi.fn(),
+  setBodyAnalysisDebugVisible: vi.fn(),
   destroy: vi.fn(),
 };
 
@@ -68,7 +71,82 @@ describe("startApp initial tattoo state", () => {
     const transformPanel = document.querySelector<HTMLElement>("[data-tattoo-transform-panel]");
     expect(transformPanel).toBeInstanceOf(HTMLElement);
     expect(transformPanel?.hidden).toBe(true);
+    expect(document.querySelector("#depthModel")).toBeNull();
+    expect(document.body.textContent).not.toContain("Depth model");
+    expect(document.querySelector("#surfaceFitStrength")).toBeInstanceOf(HTMLInputElement);
+    expect(document.querySelector<HTMLInputElement>("#surfaceFitStrength")?.max).toBe("5");
+    expect(document.body.textContent).not.toContain("Surface intensity");
+    expect(document.querySelector("#debugBodyAnalysis")).toBeNull();
+    expect(document.body.textContent).not.toContain("Show body analysis");
     expect(document.querySelector("#status")?.textContent).toContain("Upload tattoo");
+  });
+
+  test("fit strength slider updates renderer intensity and visible value", async () => {
+    document.body.innerHTML = `<div id="app"></div>`;
+    installImageDecodeStub();
+    installCanvasContextStub();
+
+    const { startApp } = await import("../src/app");
+    await startApp();
+
+    const slider = document.querySelector<HTMLInputElement>("#surfaceFitStrength");
+    const output = document.querySelector<HTMLOutputElement>("#surfaceFitStrengthValue");
+    expect(slider).toBeInstanceOf(HTMLInputElement);
+    expect(output).toBeInstanceOf(HTMLOutputElement);
+
+    slider!.value = "4.85";
+    slider!.dispatchEvent(new Event("input"));
+
+    expect(renderer.setSurfaceIntensity).toHaveBeenCalledWith(4.85);
+    expect(output?.textContent).toBe("4.85x");
+  });
+
+  test("live Fabric transform does not rebuild the body surface", async () => {
+    document.body.innerHTML = `<div id="app"></div>`;
+    installImageDecodeStub();
+    installCanvasContextStub();
+
+    const { startApp } = await import("../src/app");
+    await startApp();
+    const fabricCalls = createFabricTattooController.mock.calls as unknown as Array<[{
+      onTransformChange(transform: {
+        x: number;
+        y: number;
+        scale: number;
+        rotation: number;
+        opacity: number;
+      }, phase: "live" | "commit"): void;
+    }]>;
+    const fabricInput = fabricCalls[0]?.[0];
+    if (!fabricInput) {
+      throw new Error("Missing Fabric controller input.");
+    }
+    renderer.setBodySurface.mockClear();
+
+    fabricInput.onTransformChange({
+      x: 430,
+      y: 240,
+      scale: 0.5,
+      rotation: 0,
+      opacity: 1,
+    }, "live");
+
+    expect(renderer.setBodySurface).not.toHaveBeenCalled();
+    expect(renderer.clearTattoo).toHaveBeenCalled();
+  });
+
+  test("initializes stage display size CSS variables from the canvas frame", async () => {
+    document.body.innerHTML = `<div id="app"></div>`;
+    installImageDecodeStub();
+    installCanvasContextStub();
+    installResizeObserverStub({ width: 1200, height: 760 });
+
+    const { startApp } = await import("../src/app");
+    await startApp();
+
+    const stageStack = document.querySelector<HTMLElement>("#stageStack");
+    expect(stageStack?.style.getPropertyValue("--stage-display-width")).toBe("1103.225806451613px");
+    expect(stageStack?.style.getPropertyValue("--stage-display-height")).toBe("760px");
   });
 
   test("does not draw body-upload prompt text into the default sphere placeholder", async () => {
@@ -129,4 +207,26 @@ function installCanvasContextStub(): void {
       clearRect: vi.fn(),
     } as unknown as CanvasRenderingContext2D;
   }) as typeof HTMLCanvasElement.prototype.getContext);
+}
+
+function installResizeObserverStub(size: { width: number; height: number }): void {
+  class FakeResizeObserver {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+
+    observe(target: Element): void {
+      this.callback([
+        {
+          target,
+          contentRect: {
+            width: size.width,
+            height: size.height,
+          },
+        } as ResizeObserverEntry,
+      ], this as unknown as ResizeObserver);
+    }
+
+    disconnect(): void {}
+  }
+
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
 }

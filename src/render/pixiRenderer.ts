@@ -12,8 +12,25 @@ import {
   UniformGroup,
   type HighShaderBit,
 } from "pixi.js";
-import { buildSphereMesh, buildSphereWireframeSegments, type SphereMeshData } from "../domain/sphereMesh";
-import type { Rect, Size, SkinMeshData, SphereMeshResolution, SphereSurface, TattooTransform } from "../domain/types";
+import { buildSphereMesh, type SphereMeshData } from "../domain/sphereMesh";
+import type {
+  BodySurfaceAnalysisDebugState,
+  Rect,
+  Size,
+  SkinMeshData,
+  SphereMeshResolution,
+  SphereSurface,
+  TattooTransform,
+} from "../domain/types";
+import { createBackdrop } from "./pixiBackdrop";
+import { installContextLifecycleHandlers } from "./pixiContextLifecycle";
+import { drawActiveDebugMesh, drawBodyAnalysisDebug } from "./pixiDebugGeometry";
+import { ensureTattooSizeUniform, ensureTattooTransformUniform } from "./pixiShaderUniforms";
+export {
+  createBodyAnalysisDebugSegments,
+  createSkinWireframeSegments,
+  createSphereWireframeSegments,
+} from "./pixiDebugGeometry";
 
 export interface PixiRendererInput {
   mount: HTMLElement;
@@ -21,6 +38,8 @@ export interface PixiRendererInput {
   sphere: SphereSurface;
   mesh: SphereMeshResolution;
   disableSurfaceWarp?: boolean;
+  onContextLost?: () => void;
+  onContextRestored?: () => void;
 }
 
 export interface PixiTattooState {
@@ -39,11 +58,14 @@ export interface BodySurfaceRenderState {
 export interface PixiTattooRenderer {
   canvas: HTMLCanvasElement;
   setBodySurface(state: BodySurfaceRenderState): void;
+  setSurfaceNormalTexture(texture: Texture | null): void;
   setSurfaceIntensity(intensity: number): void;
   setTattoo(state: PixiTattooState): void;
   clearTattoo(): void;
   setDebugMeshVisible(visible: boolean): void;
   setSkinDebugMesh(mesh: SkinMeshData | null): void;
+  setBodyAnalysisDebug(state: BodySurfaceAnalysisDebugState | null): void;
+  setBodyAnalysisDebugVisible(visible: boolean): void;
   destroy(): void;
 }
 
@@ -81,7 +103,7 @@ export interface TattooShaderResourceInput {
 // TRADE-OFF: 视觉体积感会比原方案保守，但可显著降低“完全变样”风险。
 const defaultSurfaceDepth = 0.92;
 const defaultSurfaceIntensity = 1.4;
-const defaultSurfaceWarpLimitPx = 72;
+const defaultSurfaceWarpLimitPx = 56;
 
 export async function createPixiTattooRenderer(
   input: PixiRendererInput,
@@ -99,14 +121,17 @@ export async function createPixiTattooRenderer(
   });
 
   app.canvas.setAttribute("aria-label", "2D body tattoo preview canvas");
+  installContextLifecycleHandlers(app.canvas, input);
   input.mount.appendChild(app.canvas);
 
   const backdrop = createBackdrop(input.stageSize);
   const bodyMask = new Sprite(Texture.EMPTY);
   const bodySprite = new Sprite(Texture.EMPTY);
   const debugWireframe = new Graphics();
+  const bodyAnalysisDebug = new Graphics();
   let bodyMesh: SkinMeshData | null = null;
   let skinDebugMeshOverride: SkinMeshData | null = null;
+  let bodyAnalysisDebugState: BodySurfaceAnalysisDebugState | null = null;
   const sphereMesh = buildSphereMesh({ sphere: input.sphere, resolution: input.mesh });
   const fallbackProjectionMesh = mapSphereMeshToSkinMesh(sphereMesh);
   let activeProjectionMesh = fallbackProjectionMesh;
@@ -134,12 +159,14 @@ export async function createPixiTattooRenderer(
   tattooMesh.blendMode = tattooBlendMode;
   tattooMesh.mask = bodyMask;
   debugWireframe.visible = false;
+  bodyAnalysisDebug.visible = false;
 
   app.stage.addChild(backdrop);
   app.stage.addChild(bodyMask);
   app.stage.addChild(bodySprite);
   app.stage.addChild(tattooMesh);
   app.stage.addChild(debugWireframe);
+  app.stage.addChild(bodyAnalysisDebug);
 
   return {
     canvas: app.canvas,
@@ -158,24 +185,22 @@ export async function createPixiTattooRenderer(
 
       bodyMesh = state.mesh;
       activeProjectionMesh = resolveProjectionMesh(state.mesh, fallbackProjectionMesh);
-      const surfaceWarpEnabled = resolveSurfaceWarpEnabled({
-        disableSurfaceWarp: input.disableSurfaceWarp ?? false,
-        surfaceNormalTexture: state.surfaceNormalTexture,
-      });
-      resources.uSurfaceNormalTex = state.surfaceNormalTexture?.source ?? Texture.EMPTY.source;
-      resources.tattooUniforms.uniforms.uSurfaceEnabled = surfaceWarpEnabled ? 1 : 0;
-      shader.resources.uSurfaceNormalTex = resources.uSurfaceNormalTex;
+      applySurfaceNormalTextureState(resources, shader, state.surfaceNormalTexture, input.disableSurfaceWarp ?? false);
 
       const previousGeometry = tattooMesh.geometry;
       tattooMesh.geometry = createMeshGeometry(activeProjectionMesh, input.stageSize);
       previousGeometry.destroy();
       drawActiveDebugMesh(debugWireframe, skinDebugMeshOverride ?? bodyMesh);
+      drawBodyAnalysisDebug(bodyAnalysisDebug, bodyAnalysisDebugState);
     },
     setTattoo(state) {
       applyTattooState(resources, shader, state);
     },
+    setSurfaceNormalTexture(texture) {
+      applySurfaceNormalTextureState(resources, shader, texture, input.disableSurfaceWarp ?? false);
+    },
     setSurfaceIntensity(intensity) {
-      resources.tattooUniforms.uniforms.uSurfaceIntensity = clampNumber(intensity, 0, 2);
+      resources.tattooUniforms.uniforms.uSurfaceIntensity = clampNumber(intensity, 0, 5);
     },
     clearTattoo() {
       clearTattooState(resources, shader);
@@ -186,6 +211,13 @@ export async function createPixiTattooRenderer(
     setSkinDebugMesh(mesh) {
       skinDebugMeshOverride = mesh;
       drawActiveDebugMesh(debugWireframe, skinDebugMeshOverride ?? bodyMesh);
+    },
+    setBodyAnalysisDebug(state) {
+      bodyAnalysisDebugState = state;
+      drawBodyAnalysisDebug(bodyAnalysisDebug, bodyAnalysisDebugState);
+    },
+    setBodyAnalysisDebugVisible(visible) {
+      bodyAnalysisDebug.visible = visible;
     },
     destroy() {
       const geometry = tattooMesh.geometry;
@@ -201,13 +233,15 @@ export function applyTattooState(
   shader: TattooShaderBindingTarget,
   state: PixiTattooState,
 ): void {
+  const tattooSizeUniform = ensureTattooSizeUniform(resources);
+  const tattooTransformUniform = ensureTattooTransformUniform(resources);
   resources.uTexture = state.texture.source;
-  resources.tattooUniforms.uniforms.uTattooSize[0] = state.tattooSize.width;
-  resources.tattooUniforms.uniforms.uTattooSize[1] = state.tattooSize.height;
-  resources.tattooUniforms.uniforms.uTattooTransform[0] = state.transform.x;
-  resources.tattooUniforms.uniforms.uTattooTransform[1] = state.transform.y;
-  resources.tattooUniforms.uniforms.uTattooTransform[2] = state.transform.scale;
-  resources.tattooUniforms.uniforms.uTattooTransform[3] = state.transform.rotation;
+  tattooSizeUniform[0] = state.tattooSize.width;
+  tattooSizeUniform[1] = state.tattooSize.height;
+  tattooTransformUniform[0] = state.transform.x;
+  tattooTransformUniform[1] = state.transform.y;
+  tattooTransformUniform[2] = state.transform.scale;
+  tattooTransformUniform[3] = state.transform.rotation;
   resources.tattooUniforms.uniforms.uTattooOpacity = state.transform.opacity;
   shader.resources.uTexture = resources.uTexture;
 }
@@ -216,9 +250,24 @@ export function clearTattooState(
   resources: TattooShaderResources,
   shader: TattooShaderBindingTarget,
 ): void {
-  resources.uTexture = Texture.EMPTY.source;
+  resources.uTexture = getSafeFallbackTextureSource();
   resources.tattooUniforms.uniforms.uTattooOpacity = 0;
   shader.resources.uTexture = resources.uTexture;
+}
+
+export function applySurfaceNormalTextureState(
+  resources: TattooShaderResources,
+  shader: TattooShaderBindingTarget,
+  texture: Texture | null,
+  disableSurfaceWarp = false,
+): void {
+  const surfaceWarpEnabled = resolveSurfaceWarpEnabled({
+    disableSurfaceWarp,
+    surfaceNormalTexture: texture,
+  });
+  resources.uSurfaceNormalTex = texture?.source ?? getSafeFallbackTextureSource();
+  resources.tattooUniforms.uniforms.uSurfaceEnabled = surfaceWarpEnabled ? 1 : 0;
+  shader.resources.uSurfaceNormalTex = resources.uSurfaceNormalTex;
 }
 
 export function configureBodyMaskForMasking(mask: Sprite): void {
@@ -232,8 +281,8 @@ export function createTattooShaderResources(
   input: TattooShaderResourceInput,
 ): TattooShaderResources {
   return {
-    uTexture: Texture.EMPTY.source,
-    uSurfaceNormalTex: Texture.EMPTY.source,
+    uTexture: getSafeFallbackTextureSource(),
+    uSurfaceNormalTex: getSafeFallbackTextureSource(),
     tattooUniforms: new UniformGroup({
       uTattooSize: {
         value: new Float32Array([input.tattooSize.width, input.tattooSize.height]),
@@ -261,7 +310,7 @@ export function createTattooShaderResources(
         type: "f32",
       },
       uSurfaceIntensity: {
-        value: clampNumber(input.surfaceIntensity ?? defaultSurfaceIntensity, 0, 2),
+        value: clampNumber(input.surfaceIntensity ?? defaultSurfaceIntensity, 0, 5),
         type: "f32",
       },
       uMaxWarpPx: {
@@ -300,30 +349,23 @@ export const tattooProjectionFragmentMain = `
       vec2 warpedPoint = localPoint;
 
       if (uSurfaceEnabled > 0.5) {
-        vec2 safeTattooSize = max(uTattooSize, vec2(1.0));
-        vec2 normalizedPoint = localPoint / safeTattooSize;
-        vec3 encodedNormal = texture(uSurfaceNormalTex, vSurfaceUv).rgb;
-        vec3 surfaceNormal = normalize(encodedNormal * 2.0 - 1.0);
-        float surfaceIntensity = clamp(uSurfaceIntensity, 0.0, 2.0);
-        float forward = clamp(surfaceNormal.z, 0.55, 1.0);
-        float stretch = mix(1.0, 1.0 / forward, clamp(uSurfaceDepth * surfaceIntensity, 0.0, 1.75));
-        vec2 linearOffset = surfaceNormal.xy * normalizedPoint * (uSurfaceDepth * 1.45 * surfaceIntensity);
-        vec2 directionOffset = surfaceNormal.xy * (uSurfaceDepth * 0.16 * surfaceIntensity);
-        vec2 warpedNormalizedPoint = normalizedPoint * stretch + linearOffset + directionOffset;
-        vec2 warpOffsetPx = (warpedNormalizedPoint - normalizedPoint) * safeTattooSize;
-        float warpLength = length(warpOffsetPx);
-        float dynamicWarpLimit = clamp(
-          min(safeTattooSize.x, safeTattooSize.y) * (0.22 + surfaceIntensity * 0.28),
-          24.0,
-          84.0
-        );
-        float appliedWarpLimit = min(dynamicWarpLimit, uMaxWarpPx);
+        vec4 encodedNormal = texture(uSurfaceNormalTex, vSurfaceUv);
 
-        if (warpLength > appliedWarpLimit) {
-          warpOffsetPx *= appliedWarpLimit / warpLength;
+        if (encodedNormal.a > 0.0) {
+          vec3 surfaceNormal = normalize(encodedNormal.rgb * 2.0 - 1.0);
+          float surfaceIntensity = clamp(uSurfaceIntensity, 0.0, 5.0);
+          float appliedWarpLimit = min(64.0, uMaxWarpPx);
+          float fitStrength = clamp(uSurfaceDepth * surfaceIntensity / 5.0, 0.0, 1.0);
+          float warpScalePx = appliedWarpLimit * fitStrength * encodedNormal.a;
+          vec2 warpOffsetPx = surfaceNormal.xy * warpScalePx;
+          float warpLength = length(warpOffsetPx);
+
+          if (warpLength > appliedWarpLimit) {
+            warpOffsetPx *= appliedWarpLimit / warpLength;
+          }
+
+          warpedPoint = localPoint + warpOffsetPx;
         }
-
-        warpedPoint = localPoint + warpOffsetPx;
       }
 
       float c = cos(uTattooTransform.w);
@@ -444,79 +486,12 @@ function isValidUvBuffer(uvs: Float32Array | undefined, expectedLength: number):
   return true;
 }
 
-export function createSkinWireframeSegments(mesh: SkinMeshData): Float32Array {
-  const segments: number[] = [];
-  const seen = new Set<string>();
-
-  for (let i = 0; i < mesh.indices.length; i += 3) {
-    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i], mesh.indices[i + 1]);
-    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i + 1], mesh.indices[i + 2]);
-    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i + 2], mesh.indices[i]);
-  }
-
-  return new Float32Array(segments);
-}
-
-function createBackdrop(stageSize: Size): Graphics {
-  const graphics = new Graphics();
-  graphics.rect(0, 0, stageSize.width, stageSize.height);
-  graphics.fill({ color: 0xe7ece8 });
-
-  // WHY: 主画布统一使用网点背景，去掉白灰分层与 viewport 语义，让用户聚焦 body+tatoo 单一坐标系统。
-  // TRADE-OFF: 相比纯色底纹绘制多一些像素点，但可显著提升透明区域与边界可读性。
-  for (let y = 10; y < stageSize.height; y += 16) {
-    for (let x = 10; x < stageSize.width; x += 16) {
-      graphics.circle(x, y, 1.2);
-    }
-  }
-  graphics.fill({ color: 0xcad3cd, alpha: 0.55 });
-
-  return graphics;
-}
-
-function drawActiveDebugMesh(graphics: Graphics, mesh: SkinMeshData | null): void {
-  graphics.clear();
-  if (!mesh) {
-    return;
-  }
-
-  const segments = createSkinWireframeSegments(mesh);
-
-  for (let i = 0; i < segments.length; i += 4) {
-    graphics.moveTo(segments[i], segments[i + 1]);
-    graphics.lineTo(segments[i + 2], segments[i + 3]);
-  }
-
-  graphics.stroke({ color: 0x834336, width: 1, alpha: 0.7 });
-}
-
-export function createSphereWireframeSegments(mesh: SphereMeshData): Float32Array {
-  return buildSphereWireframeSegments(mesh);
-}
-
-function pushMeshEdge(
-  output: number[],
-  seen: Set<string>,
-  positions: Float32Array,
-  first: number,
-  second: number,
-): void {
-  const a = Math.min(first, second);
-  const b = Math.max(first, second);
-  const key = `${a}:${b}`;
-  if (seen.has(key)) {
-    return;
-  }
-  seen.add(key);
-
-  output.push(
-    positions[a * 2],
-    positions[a * 2 + 1],
-    positions[b * 2],
-    positions[b * 2 + 1],
-  );
-}
-
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function getSafeFallbackTextureSource(): Texture["source"] {
+  // WHY: Pixi 的 Texture.EMPTY 没有实际像素 resource，WebGL sampler 在状态切换后可能进入生成代码并读取空资源。
+  // TRADE-OFF: 使用 1x1 WHITE 会多绑定一个真实纹理，但禁用态由 opacity/uSurfaceEnabled 控制，不改变最终视觉。
+  return Texture.WHITE.source;
 }

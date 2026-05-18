@@ -6,13 +6,14 @@ import {
 import type { Size, TattooTransform } from "../domain/types";
 
 const editorImageOpacity = 0.001;
+export type FabricTransformPhase = "live" | "commit";
 
 export interface FabricControllerInput {
   canvas: HTMLCanvasElement;
   stageSize: Size;
   initialTransform: TattooTransform;
   initialImageDataUrl?: string;
-  onTransformChange(transform: TattooTransform): void;
+  onTransformChange(transform: TattooTransform, phase: FabricTransformPhase): void;
 }
 
 export interface FabricTattooController {
@@ -48,13 +49,13 @@ export async function createFabricTattooController(
     return readTattooTransform(state, input.initialTransform);
   }
 
-  function emitTransformChange(): void {
+  function emitTransformChange(phase: FabricTransformPhase = "live"): void {
     if (!state.fabricTattoo) {
       return;
     }
 
     state.fabricTattoo.set("opacity", editorImageOpacity);
-    input.onTransformChange(readTransform());
+    input.onTransformChange(readTransform(), phase);
     fabricCanvas.requestRenderAll();
   }
 
@@ -66,7 +67,7 @@ export async function createFabricTattooController(
   ): Promise<boolean> {
     const next = await createTattooImage(dataUrl, transform, (opacity) => {
       state.currentOpacity = opacity;
-      emitTransformChange();
+      emitTransformChange("live");
       return true;
     });
 
@@ -220,14 +221,12 @@ function replaceTattooImage(
 
 function installTransformListeners(
   fabricCanvas: FabricCanvas,
-  emitTransformChange: () => void,
+  emitTransformChange: (phase: FabricTransformPhase) => void,
 ): void {
-  fabricCanvas.on("object:moving", emitTransformChange);
-  fabricCanvas.on("object:scaling", emitTransformChange);
-  fabricCanvas.on("object:rotating", emitTransformChange);
-  fabricCanvas.on("object:modified", emitTransformChange);
-  fabricCanvas.on("mouse:down", emitTransformChange);
-  fabricCanvas.on("mouse:up", emitTransformChange);
+  fabricCanvas.on("object:moving", () => emitTransformChange("live"));
+  fabricCanvas.on("object:scaling", () => emitTransformChange("live"));
+  fabricCanvas.on("object:rotating", () => emitTransformChange("live"));
+  fabricCanvas.on("object:modified", () => emitTransformChange("commit"));
 }
 
 function installOpacityControl(

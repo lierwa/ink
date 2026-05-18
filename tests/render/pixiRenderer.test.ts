@@ -7,8 +7,10 @@ import {
   mapSphereMeshToSkinMesh,
   resolveProjectionMesh,
   resolveSurfaceWarpEnabled,
+  applySurfaceNormalTextureState,
   createTattooShaderResources,
   createSkinWireframeSegments,
+  createBodyAnalysisDebugSegments,
   hiddenMaskRenderableFlag,
   hiddenMaskRenderableVisible,
   tattooBlendMode,
@@ -40,8 +42,25 @@ describe("createTattooShaderResources", () => {
     expect(resources.tattooUniforms.uniforms.uSurfaceEnabled).toBe(0);
     expect(resources.tattooUniforms.uniforms.uSurfaceDepth).toBe(0.68);
     expect(resources.tattooUniforms.uniforms.uSurfaceIntensity).toBe(1.4);
-    expect(resources.tattooUniforms.uniforms.uMaxWarpPx).toBe(72);
+    expect(resources.tattooUniforms.uniforms.uMaxWarpPx).toBe(56);
     expect(resources.tattooUniforms.isUniformGroup).toBe(true);
+  });
+
+  test("allows debug fit strength up to 5x while clamping unsafe values", () => {
+    const resources = createTattooShaderResources({
+      tattooSize: { width: 100, height: 80 },
+      transform: {
+        x: 450,
+        y: 310,
+        scale: 1,
+        rotation: 0,
+        opacity: 0.84,
+      },
+      surfaceDepth: 0.68,
+      surfaceIntensity: 7,
+    });
+
+    expect(resources.tattooUniforms.uniforms.uSurfaceIntensity).toBe(5);
   });
 });
 
@@ -92,7 +111,42 @@ describe("tattoo shader state binding", () => {
     expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0.67);
   });
 
-  test("clearTattoo path clears opacity and rebinds empty texture", () => {
+  test("setTattoo path restores vector uniforms after Pixi clears cached arrays", () => {
+    const resources = createTattooShaderResources({
+      tattooSize: { width: 12, height: 9 },
+      transform: {
+        x: 450,
+        y: 310,
+        scale: 1,
+        rotation: 0,
+        opacity: 0.84,
+      },
+      surfaceDepth: 0.68,
+    });
+    resources.tattooUniforms.uniforms.uTattooSize = null as unknown as Float32Array;
+    resources.tattooUniforms.uniforms.uTattooTransform = null as unknown as Float32Array;
+    const source = { id: "next-texture" } as unknown as Texture["source"];
+    const shader = { resources: { uTexture: Texture.WHITE.source } };
+
+    applyTattooState(resources, shader, {
+      texture: { source } as unknown as Texture,
+      tattooSize: { width: 320, height: 140 },
+      transform: {
+        x: 420,
+        y: 260,
+        scale: 0.74,
+        rotation: 0.15,
+        opacity: 0.72,
+      },
+    });
+
+    expect(resources.tattooUniforms.uniforms.uTattooSize).toEqual(new Float32Array([320, 140]));
+    expect(resources.tattooUniforms.uniforms.uTattooTransform).toEqual(new Float32Array([420, 260, 0.74, 0.15]));
+    expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0.72);
+    expect(shader.resources.uTexture).toBe(source);
+  });
+
+  test("clearTattoo path clears opacity and rebinds a real fallback texture", () => {
     const resources = createTattooShaderResources({
       tattooSize: { width: 12, height: 9 },
       transform: {
@@ -109,24 +163,24 @@ describe("tattoo shader state binding", () => {
 
     clearTattooState(resources, shader);
     expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0);
-    expect(shader.resources.uTexture).toBe(Texture.EMPTY.source);
+    expect(shader.resources.uTexture).toBe(Texture.WHITE.source);
   });
 });
 
 describe("tattoo projection shader", () => {
-  test("samples tattoo through normalized warp and clamps warp distance", () => {
+  test("samples tattoo through bounded normal offset and clamps warp distance", () => {
     expect(tattooProjectionFragmentMain).toContain("vec2 localPoint = (vSurfacePoint - uTattooTransform.xy) / safeScale");
-    expect(tattooProjectionFragmentMain).toContain("vec2 normalizedPoint = localPoint / safeTattooSize");
-    expect(tattooProjectionFragmentMain).toContain("vec3 encodedNormal = texture(uSurfaceNormalTex, vSurfaceUv).rgb");
-    expect(tattooProjectionFragmentMain).toContain("float surfaceIntensity = clamp(uSurfaceIntensity, 0.0, 2.0)");
-    expect(tattooProjectionFragmentMain).toContain("float stretch = mix(1.0, 1.0 / forward, clamp(uSurfaceDepth * surfaceIntensity, 0.0, 1.75))");
-    expect(tattooProjectionFragmentMain).toContain("vec2 directionOffset = surfaceNormal.xy * (uSurfaceDepth * 0.16 * surfaceIntensity)");
-    expect(tattooProjectionFragmentMain).toContain("min(safeTattooSize.x, safeTattooSize.y) * (0.22 + surfaceIntensity * 0.28)");
-    expect(tattooProjectionFragmentMain).toContain("float appliedWarpLimit = min(dynamicWarpLimit, uMaxWarpPx)");
+    expect(tattooProjectionFragmentMain).toContain("vec4 encodedNormal = texture(uSurfaceNormalTex, vSurfaceUv)");
+    expect(tattooProjectionFragmentMain).toContain("if (encodedNormal.a > 0.0)");
+    expect(tattooProjectionFragmentMain).toContain("float surfaceIntensity = clamp(uSurfaceIntensity, 0.0, 5.0)");
+    expect(tattooProjectionFragmentMain).toContain("vec2 warpOffsetPx = surfaceNormal.xy * warpScalePx");
+    expect(tattooProjectionFragmentMain).toContain("float appliedWarpLimit = min(64.0, uMaxWarpPx)");
     expect(tattooProjectionFragmentMain).toContain("if (warpLength > appliedWarpLimit)");
     expect(tattooProjectionFragmentMain).toContain("warpedPoint = localPoint + warpOffsetPx");
     expect(tattooProjectionFragmentMain).toContain("vec4 tattooColor = texture(uTexture, tattooUv)");
     expect(tattooProjectionFragmentMain).toContain("vec4(tattooColor.rgb, tattooColor.a * uTattooOpacity)");
+    expect(tattooProjectionFragmentMain).not.toContain("1.0 / forward");
+    expect(tattooProjectionFragmentMain).not.toContain("surfaceNormal.xy * normalizedPoint");
     expect(tattooProjectionFragmentMain).not.toContain("vec2 radial = vec2(localPoint.x * abs(localPoint.x), localPoint.y * abs(localPoint.y))");
   });
 
@@ -260,5 +314,51 @@ describe("projection mesh geometry", () => {
     expect(geometry.getBuffer("aUV").data).toEqual(
       new Float32Array([10 / 900, 20 / 620, 120 / 900, 20 / 620, 10 / 900, 100 / 620]),
     );
+  });
+});
+
+describe("surface normal texture binding", () => {
+  test("updates only surface normal uniforms and resource binding", () => {
+    const resources = createTattooShaderResources({
+      tattooSize: { width: 12, height: 9 },
+      transform: {
+        x: 450,
+        y: 310,
+        scale: 1,
+        rotation: 0,
+        opacity: 0.84,
+      },
+      surfaceDepth: 0.68,
+    });
+    const shader = { resources: { uSurfaceNormalTex: Texture.EMPTY.source } };
+
+    applySurfaceNormalTextureState(resources, shader, Texture.WHITE);
+
+    expect(resources.uSurfaceNormalTex).toBe(Texture.WHITE.source);
+    expect(shader.resources.uSurfaceNormalTex).toBe(Texture.WHITE.source);
+    expect(resources.tattooUniforms.uniforms.uSurfaceEnabled).toBe(1);
+
+    applySurfaceNormalTextureState(resources, shader, null);
+
+    expect(resources.uSurfaceNormalTex).toBe(Texture.WHITE.source);
+    expect(shader.resources.uSurfaceNormalTex).toBe(Texture.WHITE.source);
+    expect(resources.tattooUniforms.uniforms.uSurfaceEnabled).toBe(0);
+  });
+});
+
+describe("body analysis debug geometry", () => {
+  test("emits only the selected local surface axis segment", () => {
+    const segments = createBodyAnalysisDebugSegments({
+      source: "local-mesh",
+      confidence: 0.42,
+      patchBounds: { x: 40, y: 50, width: 80, height: 120 },
+      axis: {
+        origin: { x: 80, y: 110 },
+        direction: { x: 0, y: 1 },
+        length: 120,
+      },
+    });
+
+    expect(Array.from(segments)).toEqual([80, 110, 80, 230]);
   });
 });

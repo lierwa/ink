@@ -92,6 +92,28 @@ describe("createSkinSegmentationService", () => {
     expect(Array.from(mask.probabilities)).toEqual([0, 1, 0, 1]);
   });
 
+  test("treats null MediaPipe labels as unlabeled masks", async () => {
+    const faceMask = createMockMask(1, 2, [0.8, 0.7]);
+    const segmenter = {
+      segment: vi.fn(() => ({
+        confidenceMasks: [faceMask],
+        close: vi.fn(),
+      })),
+      getLabels: vi.fn(() => null),
+    };
+    const service = createSkinSegmentationService({
+      createVisionFileset: vi.fn(async () => ({})),
+      createSegmenter: vi.fn(async () => segmenter as never),
+    });
+
+    const mask = await service.segmentSkinFromImageSource(document.createElement("canvas"));
+
+    expect(mask.width).toBe(1);
+    expect(mask.height).toBe(2);
+    expect(mask.probabilities[0]).toBeCloseTo(0.8, 6);
+    expect(mask.probabilities[1]).toBeCloseTo(0.7, 6);
+  });
+
   test("retries segmenter initialization after previous init failure", async () => {
     const initError = new Error("init failed");
     const segmenter = {

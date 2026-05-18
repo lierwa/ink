@@ -2,6 +2,8 @@ import { radiansToDegrees } from "./editorTransform";
 import { stageSize } from "./sphereConfig";
 import type { TattooTransform } from "./domain/types";
 
+export const defaultSurfaceFitStrength = 1.4;
+
 export function createCanvasMarkup(): string {
   return `
     <div class="stage-shell">
@@ -13,7 +15,10 @@ export function createCanvasMarkup(): string {
   `;
 }
 
-export function createAppMarkup(initialTransform: TattooTransform): string {
+export function createAppMarkup(
+  initialTransform: TattooTransform,
+  surfaceFitStrength = defaultSurfaceFitStrength,
+): string {
   return `
     <main class="studio-shell">
       <section class="preview-panel" aria-label="Body tattoo preview">
@@ -29,12 +34,6 @@ export function createAppMarkup(initialTransform: TattooTransform): string {
 
       <aside class="control-panel" aria-label="Tattoo controls">
         <div class="control-group">
-          <label>
-            <span>Depth model (takes effect on Apply Body)</span>
-            <select id="depthModel">
-              <option value="">Loading models from public/...</option>
-            </select>
-          </label>
           <label class="file-drop">
             <span>Upload body photo</span>
             <input id="bodyUpload" type="file" accept="image/png,image/jpeg,image/webp" />
@@ -47,11 +46,6 @@ export function createAppMarkup(initialTransform: TattooTransform): string {
             <input id="debugMesh" type="checkbox" />
             <span>Show body mesh</span>
           </label>
-          <label>
-            <span>Surface intensity</span>
-            <input id="surfaceIntensity" type="range" min="0" max="2" step="0.01" value="1.4" />
-            <output id="surfaceIntensityValue">140%</output>
-          </label>
         </div>
 
         <div id="tattooTransformPanel" data-tattoo-transform-panel hidden>
@@ -59,6 +53,11 @@ export function createAppMarkup(initialTransform: TattooTransform): string {
             <label>
               <span>Opacity</span>
               <input id="opacity" type="range" min="0.25" max="1" step="0.01" value="${initialTransform.opacity}" />
+            </label>
+            <label>
+              <span>Fit strength</span>
+              <output id="surfaceFitStrengthValue">${surfaceFitStrength.toFixed(2)}x</output>
+              <input id="surfaceFitStrength" type="range" min="0" max="5" step="0.05" value="${surfaceFitStrength.toFixed(2)}" />
             </label>
           </div>
 

@@ -7,6 +7,21 @@ export function clampViewportScale(scale: number): number {
   return Math.min(Math.max(scale, minViewportScale), maxViewportScale);
 }
 
+export function fitAspectRect(containerSize: { width: number; height: number }, aspectSize: { width: number; height: number }): {
+  width: number;
+  height: number;
+} {
+  if (containerSize.width <= 0 || containerSize.height <= 0 || aspectSize.width <= 0 || aspectSize.height <= 0) {
+    return { width: Math.max(0, aspectSize.width), height: Math.max(0, aspectSize.height) };
+  }
+
+  const scale = Math.min(containerSize.width / aspectSize.width, containerSize.height / aspectSize.height);
+  return {
+    width: aspectSize.width * scale,
+    height: aspectSize.height * scale,
+  };
+}
+
 export function panViewport(viewport: CanvasViewport, delta: Point): CanvasViewport {
   return {
     x: viewport.x + delta.x,

@@ -3,6 +3,11 @@ export interface Point {
   y: number;
 }
 
+export interface Vector2 {
+  x: number;
+  y: number;
+}
+
 export interface Size {
   width: number;
   height: number;
@@ -134,10 +139,30 @@ export interface SurfaceFieldData {
   width: number;
   height: number;
   normalRgba: Uint8ClampedArray;
+  normalStats?: {
+    activePixelRatio: number;
+    maxNormalXY: number;
+    meanNormalXY: number;
+  };
 }
 
 export interface DepthFieldData {
   width: number;
   height: number;
   depth: Float32Array;
+}
+
+export interface SurfaceAxis {
+  origin: Point;
+  direction: Vector2;
+  length: number;
+}
+
+export interface BodySurfaceAnalysisDebugState {
+  source: "local-mesh" | "insufficient-mesh";
+  confidence: number;
+  normalStats?: SurfaceFieldData["normalStats"];
+  axis?: SurfaceAxis;
+  patchBounds?: Rect;
+  warning?: string;
 }

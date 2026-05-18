@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   clampViewportScale,
+  fitAspectRect,
   isInteractiveTarget,
   panViewport,
   zoomViewportAtPoint,
@@ -8,6 +9,13 @@ import {
 import type { CanvasViewport } from "../../src/domain/types";
 
 describe("canvas viewport math", () => {
+  test("fits an aspect rectangle to the largest contain size", () => {
+    expect(fitAspectRect({ width: 1200, height: 760 }, { width: 900, height: 620 })).toEqual({
+      width: 1103.225806451613,
+      height: 760,
+    });
+  });
+
   test("clamps zoom scale to the supported range", () => {
     expect(clampViewportScale(0.05)).toBe(0.25);
     expect(clampViewportScale(1.5)).toBe(1.5);

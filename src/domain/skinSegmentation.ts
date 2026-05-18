@@ -35,7 +35,7 @@ interface SegmentResultLike {
 
 interface SegmenterLike {
   segment(image: TexImageSource): SegmentResultLike;
-  getLabels(): string[];
+  getLabels(): string[] | null | undefined;
 }
 
 interface SkinSegmentationDependencies {
@@ -92,7 +92,7 @@ export function createSkinSegmentationService(
       const result = segmenter.segment(image);
 
       try {
-        return mapSegmenterResultToSkinMask(result, segmenter.getLabels());
+        return mapSegmenterResultToSkinMask(result, normalizeSegmenterLabels(segmenter.getLabels()));
       } finally {
         closeSegmentResultSafely(result);
       }
@@ -126,6 +126,12 @@ function mapSegmenterResultToSkinMask(result: SegmentResultLike, labels: string[
   }
 
   return mapCategoryMaskToSkinMask(result.categoryMask, labels);
+}
+
+function normalizeSegmenterLabels(labels: string[] | null | undefined): string[] {
+  // WHY: MediaPipe 类型声明写的是 string[]，但浏览器运行时在部分模型/加载状态下会返回 null。
+  // TRADE-OFF: 缺失标签时退回覆盖率启发式，精度略低，但 Apply Body 不会被第三方元数据异常阻断。
+  return Array.isArray(labels) ? labels : [];
 }
 
 function pickSkinLikeMaskIndex(confidenceMasks: MaskLike[], labels: string[]): number {
