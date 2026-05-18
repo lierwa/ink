@@ -76,15 +76,11 @@ describe("installUploadWorkflow", () => {
 
   test("stale modal cancel does not overwrite current request status", async () => {
     const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
-    const uploadInput = document.createElement("input");
-    const removeWhiteInput = document.createElement("input");
+    const tattooUploadInput = document.createElement("input");
     const statusLabel = document.createElement("div");
-    const defaultCanvas = createCanvasStub(16, 12);
     const fabric = createFabricStub();
     let resolveModal: ((value: null) => void) | undefined;
 
-    removeWhiteInput.type = "checkbox";
-    removeWhiteInput.checked = false;
     installImageDecodeStubs(80, 60);
     installCanvasDocumentStub();
     openUploadConfirmModal.mockImplementation(() => new Promise<null>((resolve) => {
@@ -93,106 +89,119 @@ describe("installUploadWorkflow", () => {
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { uploadInput, removeWhiteInput, statusLabel },
+      elements: { tattooUploadInput, statusLabel },
       fabric,
-      pixi: createPixiStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
       syncPanelFromTransform: vi.fn(),
-      createDefaultTattooCanvas: vi.fn(async () => defaultCanvas),
     });
 
-    setInputFiles(uploadInput, [new File(["image"], "tattoo.png", { type: "image/png" })]);
-    uploadInput.dispatchEvent(new Event("change"));
+    setInputFiles(tattooUploadInput, [new File(["image"], "tattoo.png", { type: "image/png" })]);
+    tattooUploadInput.dispatchEvent(new Event("change"));
     await waitFor(() => expect(openUploadConfirmModal).toHaveBeenCalledTimes(1));
 
-    setInputFiles(uploadInput, []);
-    uploadInput.dispatchEvent(new Event("change"));
-    await waitFor(() => expect(statusLabel.textContent).toBe("default linework"));
+    setInputFiles(tattooUploadInput, []);
+    tattooUploadInput.dispatchEvent(new Event("change"));
+    await waitFor(() => expect(statusLabel.textContent).toBe("Upload tattoo to enable transform controls"));
 
     expect(resolveModal).toBeTypeOf("function");
     (resolveModal as (value: null) => void)(null);
     await Promise.resolve();
 
-    expect(statusLabel.textContent).toBe("default linework");
+    expect(statusLabel.textContent).toBe("Upload tattoo to enable transform controls");
   });
 
-  test("keeps local line-art canvas at source dimensions", async () => {
+  test("builds original and line-art options with normalized preview dimensions", async () => {
     const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
-    const uploadInput = document.createElement("input");
-    const removeWhiteInput = document.createElement("input");
+    const tattooUploadInput = document.createElement("input");
     const statusLabel = document.createElement("div");
 
-    removeWhiteInput.type = "checkbox";
-    removeWhiteInput.checked = true;
     installImageDecodeStubs(900, 600);
     installCanvasDocumentStub();
     openUploadConfirmModal.mockResolvedValue(null);
 
     installUploadWorkflow({
-      state: createWorkflowState({ removeWhiteUpload: true }),
-      elements: { uploadInput, removeWhiteInput, statusLabel },
+      state: createWorkflowState(),
+      elements: { tattooUploadInput, statusLabel },
       fabric: createFabricStub(),
-      pixi: createPixiStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
       syncPanelFromTransform: vi.fn(),
-      createDefaultTattooCanvas: vi.fn(async () => createCanvasStub(16, 12)),
     });
 
-    setInputFiles(uploadInput, [new File(["image"], "large.png", { type: "image/png" })]);
-    uploadInput.dispatchEvent(new Event("change"));
+    setInputFiles(tattooUploadInput, [new File(["image"], "large.png", { type: "image/png" })]);
+    tattooUploadInput.dispatchEvent(new Event("change"));
     await waitFor(() => expect(openUploadConfirmModal).toHaveBeenCalledTimes(1));
 
     const modalInput = openUploadConfirmModal.mock.calls[0]?.[0];
     expect(modalInput.initialMode).toBe("line-art");
-    expect(modalInput.options.map((option: { mode: string }) => option.mode)).toEqual(["line-art"]);
-    expect(modalInput.options[0].canvas).toMatchObject({ width: 900, height: 600 });
+    expect(modalInput.options.map((option: { mode: string }) => option.mode)).toEqual(["original", "line-art"]);
+    expect(modalInput.options[0].canvas).toMatchObject({ width: 520, height: 347 });
+    expect(modalInput.options[1].canvas).toMatchObject({ width: 520, height: 347 });
   });
 
-  test("opens confirmation modal with line-art even when cleanup toggle is disabled", async () => {
+  test("updates status message after tattoo apply", async () => {
     const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
-    const uploadInput = document.createElement("input");
-    const removeWhiteInput = document.createElement("input");
+    const tattooUploadInput = document.createElement("input");
     const statusLabel = document.createElement("div");
+    const confirmedCanvas = createCanvasStub(320, 240);
 
-    removeWhiteInput.type = "checkbox";
-    removeWhiteInput.checked = false;
     installImageDecodeStubs(320, 240);
     installCanvasDocumentStub();
-    openUploadConfirmModal.mockResolvedValue(null);
+    openUploadConfirmModal.mockResolvedValue({ canvas: confirmedCanvas, mode: "original" });
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { uploadInput, removeWhiteInput, statusLabel },
+      elements: { tattooUploadInput, statusLabel },
       fabric: createFabricStub(),
-      pixi: createPixiStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
       syncPanelFromTransform: vi.fn(),
-      createDefaultTattooCanvas: vi.fn(async () => createCanvasStub(16, 12)),
     });
 
-    setInputFiles(uploadInput, [new File(["image"], "fast.png", { type: "image/png" })]);
-    uploadInput.dispatchEvent(new Event("change"));
-    await waitFor(() => expect(openUploadConfirmModal).toHaveBeenCalledTimes(1));
+    setInputFiles(tattooUploadInput, [new File(["image"], "fast.png", { type: "image/png" })]);
+    tattooUploadInput.dispatchEvent(new Event("change"));
+    await waitFor(() => expect(statusLabel.textContent).toBe("applied tattoo (original)"));
+  });
 
-    const modalInput = openUploadConfirmModal.mock.calls[0]?.[0];
-    expect(modalInput.initialMode).toBe("line-art");
-    expect(modalInput.options.map((option: { mode: string }) => option.mode)).toEqual(["line-art"]);
+  test("shows fallback status when line-art result falls back to original", async () => {
+    const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
+    const tattooUploadInput = document.createElement("input");
+    const statusLabel = document.createElement("div");
+    const confirmedCanvas = createCanvasStub(320, 240);
+
+    installImageDecodeStubs(320, 240);
+    installCanvasDocumentStub();
+    openUploadConfirmModal.mockResolvedValue({
+      canvas: confirmedCanvas,
+      mode: "original",
+      fallbackFrom: "line-art",
+    });
+
+    installUploadWorkflow({
+      state: createWorkflowState(),
+      elements: { tattooUploadInput, statusLabel },
+      fabric: createFabricStub(),
+      initialTransform: transform,
+      renderTattoo: vi.fn(),
+      syncPanelFromTransform: vi.fn(),
+    });
+
+    setInputFiles(tattooUploadInput, [new File(["image"], "fallback.png", { type: "image/png" })]);
+    tattooUploadInput.dispatchEvent(new Event("change"));
+    await waitFor(() => expect(statusLabel.textContent).toBe("applied tattoo (line-art -> original fallback)"));
   });
 });
 
-function createWorkflowState(overrides: Partial<{
-  removeWhiteUpload: boolean;
-}> = {}) {
+function createWorkflowState() {
   return {
     tattooTransform: { ...transform },
-    tattooSize: { width: 10, height: 10 },
-    tattooTexture: {} as Texture,
-    tattooDataUrl: "data:image/png;base64,old",
+    tattooAsset: {
+      size: { width: 10, height: 10 },
+      texture: {} as Texture,
+      dataUrl: "data:image/png;base64,old",
+    },
     transformRevision: 1,
-    removeWhiteUpload: overrides.removeWhiteUpload ?? false,
   };
 }
 
@@ -213,20 +222,14 @@ function createFabricStub() {
     }),
     setTransform: vi.fn(),
     getTransform: vi.fn(() => transform),
+    clearTattoo: vi.fn(),
+    hasTattoo: vi.fn(() => true),
     render: vi.fn(),
     dispose: vi.fn(),
   };
 }
 
-function createPixiStub() {
-  return {
-    canvas: document.createElement("canvas"),
-    setTattoo: vi.fn(),
-    setMeshResolution: vi.fn(),
-    setDebugMeshVisible: vi.fn(),
-    destroy: vi.fn(),
-  };
-}
+const originalCreateElement = document.createElement.bind(document);
 
 function createCanvasStub(width: number, height: number): HTMLCanvasElement & {
   context: {
@@ -268,60 +271,65 @@ function createCanvasStub(width: number, height: number): HTMLCanvasElement & {
 function installCanvasDocumentStub(): void {
   vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
     if (tagName.toLowerCase() === "canvas") {
-      return createCanvasStub(0, 0);
+      return createCanvasStub(1, 1);
     }
 
     return originalCreateElement(tagName);
   });
 }
 
-const originalCreateElement = document.createElement.bind(document);
-
 function installImageDecodeStubs(width: number, height: number): void {
-  class TestFileReader {
-    result: string | ArrayBuffer | null = null;
-    onload: (() => void) | null = null;
-    onerror: (() => void) | null = null;
+  class FakeFileReader {
+    static DONE = 2;
+    readyState = 0;
+    result: string | null = null;
+    onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+    onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
 
-    readAsDataURL(): void {
-      this.result = "data:image/png;base64,AA==";
-      queueMicrotask(() => this.onload?.());
+    readAsDataURL(file: File): void {
+      this.readyState = FakeFileReader.DONE;
+      this.result = `data:image/png;base64,${file.name}`;
+      queueMicrotask(() => {
+        this.onload?.({ target: this as unknown as FileReader } as ProgressEvent<FileReader>);
+      });
     }
   }
 
-  class TestImage {
+  class FakeImage {
     width = width;
     height = height;
     onload: (() => void) | null = null;
     onerror: (() => void) | null = null;
 
     set src(_value: string) {
-      queueMicrotask(() => this.onload?.());
+      queueMicrotask(() => {
+        this.onload?.();
+      });
     }
   }
 
-  vi.stubGlobal("FileReader", TestFileReader);
-  vi.stubGlobal("Image", TestImage);
+  vi.stubGlobal("FileReader", FakeFileReader as unknown as typeof FileReader);
+  vi.stubGlobal("Image", FakeImage as unknown as typeof Image);
 }
 
 function setInputFiles(input: HTMLInputElement, files: File[]): void {
   Object.defineProperty(input, "files", {
     configurable: true,
-    value: files,
+    get() {
+      return files as unknown as FileList;
+    },
   });
 }
 
 async function waitFor(assertion: () => void): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let i = 0; i < 20; i += 1) {
     try {
       assertion();
       return;
-    } catch (error) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      if (attempt === 19) {
-        throw error;
-      }
+    } catch {
+      await Promise.resolve();
     }
   }
+
+  assertion();
 }

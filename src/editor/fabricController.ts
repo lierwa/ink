@@ -11,7 +11,7 @@ export interface FabricControllerInput {
   canvas: HTMLCanvasElement;
   stageSize: Size;
   initialTransform: TattooTransform;
-  initialImageDataUrl: string;
+  initialImageDataUrl?: string;
   onTransformChange(transform: TattooTransform): void;
 }
 
@@ -24,6 +24,8 @@ export interface FabricTattooController {
   ): Promise<boolean>;
   setTransform(transform: TattooTransform): void;
   getTransform(): TattooTransform;
+  clearTattoo(): void;
+  hasTattoo(): boolean;
   render(): void;
   dispose(): void;
 }
@@ -91,12 +93,27 @@ export async function createFabricTattooController(
   }
 
   installTransformListeners(fabricCanvas, emitTransformChange);
-  await setImage(input.initialImageDataUrl, input.initialTransform);
+  if (input.initialImageDataUrl) {
+    await setImage(input.initialImageDataUrl, input.initialTransform);
+  }
 
   return {
     setImage,
     setTransform,
     getTransform: readTransform,
+    clearTattoo() {
+      if (!state.fabricTattoo) {
+        return;
+      }
+
+      fabricCanvas.remove(state.fabricTattoo);
+      state.fabricTattoo = null;
+      fabricCanvas.discardActiveObject();
+      fabricCanvas.requestRenderAll();
+    },
+    hasTattoo() {
+      return state.fabricTattoo !== null;
+    },
     render() {
       if (state.fabricTattoo) {
         state.fabricTattoo.set("opacity", editorImageOpacity);

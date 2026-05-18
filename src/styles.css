@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+summary {
   font: inherit;
 }
 
@@ -61,7 +62,6 @@ h1 {
   color: #a44736;
   font-size: 0.74rem;
   font-weight: 800;
-  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -88,26 +88,18 @@ h1 {
   display: grid;
   place-items: center;
   min-height: 0;
-  padding: 18px;
+  padding: 0;
+  background: #e7ece8;
 }
 
-.viewport-surface {
+.stage-shell {
   display: grid;
   place-items: center;
-  width: min(100%, 900px);
+  width: 100%;
+  height: 100%;
   aspect-ratio: 900 / 620;
-  max-height: calc(100vh - 120px);
+  max-height: none;
   overflow: hidden;
-  touch-action: none;
-}
-
-.viewport-surface.is-panning-enabled,
-.viewport-surface.is-panning {
-  cursor: grab;
-}
-
-.viewport-surface.is-panning {
-  cursor: grabbing;
 }
 
 .stage-stack {
@@ -118,7 +110,6 @@ h1 {
   border-radius: 8px;
   box-shadow: 0 18px 40px rgba(21, 24, 25, 0.22);
   overflow: hidden;
-  transform-origin: 0 0;
 }
 
 .pixi-layer,
@@ -154,6 +145,15 @@ h1 {
   border-bottom: 1px solid rgba(247, 251, 250, 0.13);
 }
 
+#tattooTransformPanel {
+  display: grid;
+  gap: 18px;
+}
+
+#tattooTransformPanel[hidden] {
+  display: none;
+}
+
 .control-group label {
   display: grid;
   gap: 8px;
@@ -162,31 +162,12 @@ h1 {
   font-weight: 700;
 }
 
-.control-heading {
-  display: block;
-  color: #f7fbfa;
-  font-size: 0.84rem;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.control-help {
-  margin: 5px 0 0;
-  color: #9ca9a7;
-  font-size: 0.78rem;
-  line-height: 1.35;
-}
-
-.surface-grid-group {
-  gap: 10px;
-}
-
 .file-drop {
-  min-height: 92px;
+  min-height: 78px;
   place-items: center;
   border: 1px dashed rgba(247, 251, 250, 0.38);
   border-radius: 8px;
-  padding: 16px;
+  padding: 14px;
   background: #2d3333;
   color: #ffffff;
   cursor: pointer;
@@ -261,7 +242,8 @@ button:hover {
   background: #f0bf63;
 }
 
-.upload-confirm-overlay {
+.upload-confirm-overlay,
+.body-upload-overlay {
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -271,13 +253,10 @@ button:hover {
   background: rgba(13, 15, 18, 0.72);
 }
 
-.upload-confirm-dialog {
-  display: grid;
-  grid-template-rows: auto auto auto auto;
-  width: fit-content;
-  min-width: min(92vw, 420px);
-  max-width: 92vw;
-  max-height: 92vh;
+.upload-confirm-dialog,
+.body-upload-dialog {
+  max-width: 96vw;
+  max-height: 90vh;
   border-radius: 8px;
   background: #ffffff;
   color: #171b1c;
@@ -285,18 +264,39 @@ button:hover {
   overflow: hidden;
 }
 
+.upload-confirm-dialog {
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  width: fit-content;
+  min-width: min(92vw, 420px);
+}
+
 .upload-confirm-header,
-.upload-confirm-footer {
+.upload-confirm-footer,
+.body-upload-header,
+.body-upload-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 16px;
+}
+
+.upload-confirm-header,
+.body-upload-header {
   border-bottom: 1px solid #e2e6e8;
 }
 
+.upload-confirm-footer,
+.body-upload-footer {
+  justify-content: flex-end;
+  border-top: 1px solid #e2e6e8;
+}
+
 .upload-confirm-header h2,
-.upload-confirm-header p {
+.upload-confirm-header p,
+.body-upload-header h2,
+.body-upload-header p {
   margin: 0;
 }
 
@@ -305,43 +305,84 @@ button:hover {
   gap: 4px;
 }
 
-.upload-confirm-header h2 {
-  font-size: 1.1rem;
-}
-
 .upload-confirm-header p,
-.upload-confirm-header small {
+.upload-confirm-header small,
+.body-upload-header p,
+.body-upload-header small {
   color: #65706f;
   font-size: 0.82rem;
   font-weight: 700;
 }
 
-.upload-confirm-header small {
+.upload-confirm-header small,
+.body-upload-header small {
   max-width: min(44vw, 340px);
   overflow-wrap: anywhere;
   text-align: right;
 }
 
-.upload-confirm-preview {
+.upload-confirm-preview,
+.body-upload-preview {
   position: relative;
+  justify-self: center;
+  background-color: #f8f8f8;
+  background-image: radial-gradient(circle at 6px 6px, rgba(130, 141, 137, 0.28) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+.upload-confirm-preview {
   width: max-content;
   max-width: 92vw;
   max-height: min(68vh, 640px);
-  justify-self: center;
+  overflow: auto;
+}
+
+.upload-confirm-mode-switch {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.upload-confirm-mode-switch button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid rgba(20, 23, 29, 0.35);
+  background: rgba(245, 248, 248, 0.88);
+  color: #1b2023;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.upload-confirm-mode-switch button.is-active {
+  border-color: #a44736;
+  background: #d56a4f;
+}
+
+.body-upload-preview {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 260px;
+  height: min(62vh, 560px);
   overflow: hidden;
-  background-color: #f8f8f8;
-  background-image:
-    linear-gradient(45deg, #dedede 25%, transparent 25%),
-    linear-gradient(-45deg, #dedede 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #dedede 75%),
-    linear-gradient(-45deg, transparent 75%, #dedede 75%);
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  background-size: 20px 20px;
+}
+
+.upload-confirm-preview canvas,
+.body-upload-preview canvas {
+  display: block;
 }
 
 .upload-confirm-preview canvas {
-  display: block;
   max-width: none;
+}
+
+.body-upload-preview canvas {
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .upload-confirm-controls {
@@ -360,15 +401,12 @@ button:hover {
 }
 
 .upload-confirm-scales button,
-.upload-confirm-footer button {
+.upload-confirm-footer button,
+.body-upload-footer button,
+.body-upload-actions-inline button,
+.body-upload-modes button {
   min-height: 34px;
   padding: 7px 12px;
-}
-
-.upload-confirm-footer {
-  justify-content: flex-end;
-  border-top: 1px solid #e2e6e8;
-  border-bottom: 0;
 }
 
 .upload-crop-box {
@@ -408,6 +446,124 @@ button:hover {
   cursor: nwse-resize;
 }
 
+.body-upload-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1180px, 96vw);
+  min-width: min(95vw, 1040px);
+}
+
+.body-upload-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.body-upload-preview-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.body-upload-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.body-upload-modes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.body-upload-modes button {
+  background: #e7ece8;
+}
+
+.body-upload-modes button.is-active {
+  background: #d56a4f;
+}
+
+.body-upload-controls {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.body-upload-group {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e2e6e8;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.body-upload-group h3 {
+  margin: 0;
+  font-size: 0.88rem;
+  text-transform: uppercase;
+  color: #4b5755;
+}
+
+.body-upload-group label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: #303838;
+}
+
+.body-upload-number-field {
+  align-content: start;
+  grid-template-rows: auto 34px;
+  min-height: 62px;
+}
+
+.body-upload-number-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px;
+  gap: 8px;
+  align-items: center;
+}
+
+.body-upload-number-controls input[type="range"] {
+  width: 100%;
+  margin: 0;
+}
+
+.body-upload-group input[type="number"] {
+  width: 100%;
+  border: 1px solid #c8d2d0;
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+.body-upload-advanced summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #4b5755;
+}
+
+.body-upload-actions-inline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 1080px) {
+  .body-upload-main {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 860px) {
   .studio-shell {
     grid-template-columns: 1fr;
@@ -423,13 +579,19 @@ button:hover {
   }
 
   .upload-confirm-header,
-  .upload-confirm-controls {
+  .upload-confirm-controls,
+  .body-upload-header {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .upload-confirm-header small {
+  .upload-confirm-header small,
+  .body-upload-header small {
     max-width: 100%;
     text-align: left;
+  }
+
+  .body-upload-number-controls {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,23 +1,31 @@
 import { Texture } from "pixi.js";
-import { createFabricUpdateQueue, getDefaultCommitTransform, getUploadCommitTransform, type RunCurrentFabricUpdate } from "./appUploadQueue";
+import {
+  createFabricUpdateQueue,
+  getUploadCommitTransform,
+  type RunCurrentFabricUpdate,
+} from "./appUploadQueue";
 import { type FabricTattooController } from "./editor/fabricController";
-import { openUploadConfirmModal, type ProcessedTattooOption, type UploadProcessingMode } from "./editor/uploadConfirmModal";
+import {
+  openUploadConfirmModal,
+  type ProcessedTattooOption,
+  type UploadProcessingMode,
+} from "./editor/uploadConfirmModal";
 import type { Size, TattooTransform } from "./domain/types";
 import { cleanupLineArtBackground } from "./image/lineArtCleanup";
-import type { PixiTattooRenderer } from "./render/pixiRenderer";
+import { defaultTattooSize } from "./defaultTattoo";
 
 export interface UploadWorkflowState {
   tattooTransform: TattooTransform;
-  tattooSize: Size;
-  tattooTexture: Texture;
-  tattooDataUrl: string;
+  tattooAsset: {
+    texture: Texture;
+    size: Size;
+    dataUrl: string;
+  } | null;
   transformRevision: number;
-  removeWhiteUpload: boolean;
 }
 
 export interface UploadWorkflowElements {
-  uploadInput: HTMLInputElement;
-  removeWhiteInput: HTMLInputElement;
+  tattooUploadInput: HTMLInputElement;
   statusLabel: HTMLElement;
 }
 
@@ -25,11 +33,9 @@ export interface UploadWorkflowInput {
   state: UploadWorkflowState;
   elements: UploadWorkflowElements;
   fabric: FabricTattooController;
-  pixi: PixiTattooRenderer;
   initialTransform: TattooTransform;
   renderTattoo(): void;
   syncPanelFromTransform(): void;
-  createDefaultTattooCanvas(): Promise<HTMLCanvasElement>;
 }
 
 type IsCurrentRequest = (requestId: number) => boolean;
@@ -38,29 +44,28 @@ interface ProcessedUploadOptions {
   options: ProcessedTattooOption[];
 }
 
+const tattooUploadMaxEdge = Math.max(defaultTattooSize.width, defaultTattooSize.height);
+
 export function installUploadWorkflow(input: UploadWorkflowInput): void {
   let uploadedFile: File | null = null;
   let latestUploadRequestId = 0;
   const isCurrentRequest = (requestId: number): boolean => requestId === latestUploadRequestId;
   const runCurrentFabricUpdate = createFabricUpdateQueue(isCurrentRequest);
+
   const refresh = async (): Promise<void> => {
     const requestId = latestUploadRequestId + 1;
     latestUploadRequestId = requestId;
 
     if (!uploadedFile) {
-      await updateDefaultTattoo(input, requestId, isCurrentRequest, runCurrentFabricUpdate);
+      clearCurrentTattoo(input, requestId, isCurrentRequest);
       return;
     }
 
     await updateUploadedTattoo(uploadedFile, input, requestId, isCurrentRequest, runCurrentFabricUpdate);
   };
 
-  input.elements.removeWhiteInput.addEventListener("change", () => {
-    input.state.removeWhiteUpload = input.elements.removeWhiteInput.checked;
-    void refresh();
-  });
-  input.elements.uploadInput.addEventListener("change", () => {
-    uploadedFile = input.elements.uploadInput.files?.[0] ?? null;
+  input.elements.tattooUploadInput.addEventListener("change", () => {
+    uploadedFile = input.elements.tattooUploadInput.files?.[0] ?? null;
     void refresh();
   });
 }
@@ -74,7 +79,7 @@ async function updateUploadedTattoo(
 ): Promise<void> {
   try {
     const startTransformRevision = input.state.transformRevision;
-    input.elements.statusLabel.textContent = "processing upload...";
+    input.elements.statusLabel.textContent = "processing tattoo upload...";
     const processedOptions = await createProcessedOptions(uploadedFile);
 
     if (!isCurrentRequest(requestId)) {
@@ -92,7 +97,7 @@ async function updateUploadedTattoo(
     }
 
     if (!confirmed) {
-      input.elements.statusLabel.textContent = "upload cancelled";
+      input.elements.statusLabel.textContent = "tattoo upload cancelled";
       return;
     }
 
@@ -118,11 +123,20 @@ async function updateUploadedTattoo(
       return;
     }
 
-    input.state.tattooTexture = Texture.from(canvas);
-    input.state.tattooDataUrl = dataUrl;
-    input.state.tattooSize = { width: canvas.width, height: canvas.height };
+    input.state.tattooAsset = {
+      texture: Texture.from(canvas),
+      dataUrl,
+      size: { width: canvas.width, height: canvas.height },
+    };
     input.state.tattooTransform = committedTransform;
-    input.elements.statusLabel.textContent = `uploaded ${confirmed.mode}`;
+
+    if (!isCurrentRequest(requestId)) {
+      return;
+    }
+
+    input.elements.statusLabel.textContent = confirmed.fallbackFrom
+      ? `applied tattoo (${confirmed.fallbackFrom} -> ${confirmed.mode} fallback)`
+      : `applied tattoo (${confirmed.mode})`;
     input.syncPanelFromTransform();
     input.renderTattoo();
   } catch (error) {
@@ -130,69 +144,45 @@ async function updateUploadedTattoo(
       return;
     }
 
-    input.elements.statusLabel.textContent = `upload failed: ${getErrorMessage(error)}`;
+    input.elements.statusLabel.textContent = `tattoo upload failed: ${getErrorMessage(error)}`;
   }
 }
 
-async function updateDefaultTattoo(
+function clearCurrentTattoo(
   input: UploadWorkflowInput,
   requestId: number,
   isCurrentRequest: IsCurrentRequest,
-  runCurrentFabricUpdate: RunCurrentFabricUpdate,
-): Promise<void> {
-  try {
-    const startTransformRevision = input.state.transformRevision;
-    const canvas = await input.createDefaultTattooCanvas();
-    const dataUrl = canvas.toDataURL("image/png");
-    let committedTransform: TattooTransform | null = null;
-
-    if (!isCurrentRequest(requestId)) {
-      return;
-    }
-
-    const didUpdateFabric = await runCurrentFabricUpdate(
-      requestId,
-      (shouldCommit) => input.fabric.setImage(
-        dataUrl,
-        getDefaultCommitTransform(input.state, startTransformRevision, input.initialTransform),
-        shouldCommit,
-        () => {
-          const nextTransform = getDefaultCommitTransform(input.state, startTransformRevision, input.initialTransform);
-          committedTransform = nextTransform;
-          return nextTransform;
-        },
-      ),
-    );
-
-    if (!didUpdateFabric || !committedTransform) {
-      return;
-    }
-
-    input.state.tattooTexture = Texture.from(canvas);
-    input.state.tattooDataUrl = dataUrl;
-    input.state.tattooSize = { width: canvas.width, height: canvas.height };
-    input.state.tattooTransform = committedTransform;
-    input.elements.statusLabel.textContent = "default linework";
-    input.syncPanelFromTransform();
-    input.renderTattoo();
-  } catch (error) {
-    if (!isCurrentRequest(requestId)) {
-      return;
-    }
-
-    input.elements.statusLabel.textContent = `upload failed: ${getErrorMessage(error)}`;
+): void {
+  if (!isCurrentRequest(requestId)) {
+    return;
   }
+
+  // WHY: 空文件态代表尚无 tattoo 资产，不能回填默认线稿，否则 Fabric 会过早创建可编辑框。
+  // TRADE-OFF: 首屏少一个示例贴图，但交互状态和用户上传生命周期保持一致。
+  input.fabric.clearTattoo();
+  input.state.tattooAsset = null;
+  input.state.tattooTransform = { ...input.initialTransform };
+  input.elements.statusLabel.textContent = "Upload tattoo to enable transform controls";
+  input.syncPanelFromTransform();
+  input.renderTattoo();
 }
 
 async function createProcessedOptions(
   file: File,
 ): Promise<ProcessedUploadOptions> {
   const originalCanvas = await fileToCanvas(file);
+  const normalizedCanvas = normalizeTattooCanvas(originalCanvas, tattooUploadMaxEdge);
+
   const options: ProcessedTattooOption[] = [
+    {
+      mode: "original",
+      label: "Original",
+      canvas: normalizedCanvas,
+    },
     {
       mode: "line-art",
       label: "Line Art Cleanup",
-      canvas: createLineArtCanvas(originalCanvas),
+      canvas: createLineArtCanvas(normalizedCanvas),
     },
   ];
 
@@ -200,8 +190,15 @@ async function createProcessedOptions(
 }
 
 function getInitialUploadMode(options: ProcessedTattooOption[]): UploadProcessingMode {
-  const preferred = options.find((option) => !option.error && option.mode !== "original");
-  return preferred?.mode ?? "original";
+  // WHY: 产品侧要求默认展示 line-art，用户可在 modal 左上角与 original 对比后再 Apply。
+  // TRADE-OFF: line-art 在极端输入上可能接近透明，因此由 Apply 阶段自动回退兜底可见性。
+  const preferred = options.find((option) => option.mode === "line-art" && !option.error);
+  if (preferred) {
+    return preferred.mode;
+  }
+
+  const firstAvailable = options.find((option) => !option.error);
+  return firstAvailable?.mode ?? "original";
 }
 
 async function fileToCanvas(file: File): Promise<HTMLCanvasElement> {
@@ -211,7 +208,6 @@ async function fileToCanvas(file: File): Promise<HTMLCanvasElement> {
   canvas.height = image.height;
   const context = requiredContext(canvas);
 
-  // WHY: 裁剪模态框必须看到完整源图尺寸；预览缩放属于模态框显示层，不能提前替换源像素。
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
@@ -231,6 +227,7 @@ function fileToImage(file: File): Promise<HTMLImageElement> {
       image.onerror = () => reject(new Error(`Could not decode ${file.name} as PNG, JPG, or WebP.`));
       image.src = reader.result;
     };
+
     reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
     reader.readAsDataURL(file);
   });
@@ -244,9 +241,28 @@ function createLineArtCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   context.drawImage(source, 0, 0);
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 
-  // WHY: 上传流程现在固定走线稿清理；算法只改 alpha 不改 RGB，避免贴图笔触被二次加深。
+  // WHY: 贴图上传链路只做纹理清理，保证不会误触发 body mesh 重建导致主流程语义混乱。
+  // TRADE-OFF: 失去“上传即自动贴附”捷径，但能保持 Body 与 Tattoo 职责解耦。
   cleanupLineArtBackground(imageData);
   context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function normalizeTattooCanvas(source: HTMLCanvasElement, maxEdge: number): HTMLCanvasElement {
+  const longEdge = Math.max(source.width, source.height);
+  if (longEdge <= maxEdge) {
+    return source;
+  }
+
+  const scale = maxEdge / longEdge;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const context = requiredContext(canvas);
+
+  // WHY: 上传图统一归一到成熟基准尺寸，避免超大原图在球面投影里只采样到中心极小区域导致“看不见”。
+  // TRADE-OFF: 牺牲部分原始分辨率，但换来稳定可见的默认贴附效果与更可控的交互缩放。
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 

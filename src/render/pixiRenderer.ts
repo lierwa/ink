@@ -12,8 +12,8 @@ import {
   UniformGroup,
   type HighShaderBit,
 } from "pixi.js";
-import { buildSphereMesh, buildSphereWireframeSegments } from "../domain/sphereMesh";
-import type { Size, SphereMeshResolution, SphereSurface, TattooTransform } from "../domain/types";
+import { buildSphereMesh, buildSphereWireframeSegments, type SphereMeshData } from "../domain/sphereMesh";
+import type { Rect, Size, SkinMeshData, SphereMeshResolution, SphereSurface, TattooTransform } from "../domain/types";
 
 export interface PixiRendererInput {
   mount: HTMLElement;
@@ -28,28 +28,40 @@ export interface PixiTattooState {
   transform: TattooTransform;
 }
 
+export interface BodySurfaceRenderState {
+  texture: Texture;
+  placementRect: Rect;
+  mesh: SkinMeshData | null;
+}
+
 export interface PixiTattooRenderer {
   canvas: HTMLCanvasElement;
+  setBodySurface(state: BodySurfaceRenderState): void;
   setTattoo(state: PixiTattooState): void;
+  clearTattoo(): void;
   setDebugMeshVisible(visible: boolean): void;
-  setMeshResolution(resolution: SphereMeshResolution): void;
+  setSkinDebugMesh(mesh: SkinMeshData | null): void;
   destroy(): void;
 }
 
 export const tattooBlendMode = "normal";
+export const hiddenMaskRenderableVisible = true;
+export const hiddenMaskRenderableFlag = false;
 
 export type TattooShaderResources = {
   uTexture: Texture["source"];
   tattooUniforms: UniformGroup<{
-    uSphere: { value: Float32Array; type: "vec3<f32>" };
     uTattooSize: { value: Float32Array; type: "vec2<f32>" };
     uTattooTransform: { value: Float32Array; type: "vec4<f32>" };
     uTattooOpacity: { value: number; type: "f32" };
   }>;
 };
 
+export interface TattooShaderBindingTarget {
+  resources: Record<string, unknown>;
+}
+
 export interface TattooShaderResourceInput {
-  sphere: SphereSurface;
   tattooSize: Size;
   transform: TattooTransform;
 }
@@ -69,63 +81,80 @@ export async function createPixiTattooRenderer(
     preference: "webgl",
   });
 
-  app.canvas.setAttribute("aria-label", "2D sphere tattoo preview canvas");
+  app.canvas.setAttribute("aria-label", "2D body tattoo preview canvas");
   input.mount.appendChild(app.canvas);
 
-  app.stage.addChild(createBackdrop(input.stageSize));
-  app.stage.addChild(createSphereSprite(input.sphere));
-
+  const backdrop = createBackdrop(input.stageSize);
+  const bodyMask = new Sprite(Texture.EMPTY);
+  const bodySprite = new Sprite(Texture.EMPTY);
+  const debugWireframe = new Graphics();
+  let bodyMesh: SkinMeshData | null = null;
+  let skinDebugMeshOverride: SkinMeshData | null = null;
   const sphereMesh = buildSphereMesh({ sphere: input.sphere, resolution: input.mesh });
+  const fallbackProjectionMesh = mapSphereMeshToSkinMesh(sphereMesh);
+  let activeProjectionMesh = fallbackProjectionMesh;
   const resources = createTattooShaderResources({
-    sphere: input.sphere,
     tattooSize: { width: 1, height: 1 },
     transform: {
       x: input.sphere.cx,
       y: input.sphere.cy,
       scale: 1,
       rotation: 0,
-      opacity: 1,
+      opacity: 0,
     },
   });
   const shader = createTattooShader(resources);
   const tattooMesh = new Mesh({
-    geometry: createMeshGeometry(sphereMesh),
+    geometry: createMeshGeometry(activeProjectionMesh, input.stageSize),
     shader,
   });
-  const mask = createHardSphereMaskSprite(input.stageSize, input.sphere);
-  // WHY: 背景透明度由上传清理阶段的 alpha 决定；渲染层只做普通覆盖，避免混合模式把贴图颜色再次改暗。
-  // TRADE-OFF: 不模拟墨水乘色效果，优先保证球面显示接近裁剪 modal 的原始像素。
+
+  configureBodyMaskForMasking(bodyMask);
+  bodySprite.anchor.set(0);
   tattooMesh.blendMode = tattooBlendMode;
-  tattooMesh.mask = mask;
-  const debugWireframe = createWireframeOverlay(sphereMesh);
+  tattooMesh.mask = bodyMask;
   debugWireframe.visible = false;
 
-  app.stage.addChild(mask);
+  app.stage.addChild(backdrop);
+  app.stage.addChild(bodyMask);
+  app.stage.addChild(bodySprite);
   app.stage.addChild(tattooMesh);
   app.stage.addChild(debugWireframe);
 
   return {
     canvas: app.canvas,
+    setBodySurface(state) {
+      bodySprite.texture = state.texture;
+      bodySprite.x = state.placementRect.x;
+      bodySprite.y = state.placementRect.y;
+      bodySprite.width = state.placementRect.width;
+      bodySprite.height = state.placementRect.height;
+
+      bodyMask.texture = state.texture;
+      bodyMask.x = state.placementRect.x;
+      bodyMask.y = state.placementRect.y;
+      bodyMask.width = state.placementRect.width;
+      bodyMask.height = state.placementRect.height;
+
+      bodyMesh = state.mesh;
+      activeProjectionMesh = resolveProjectionMesh(state.mesh, fallbackProjectionMesh);
+      const previousGeometry = tattooMesh.geometry;
+      tattooMesh.geometry = createMeshGeometry(activeProjectionMesh, input.stageSize);
+      previousGeometry.destroy();
+      drawActiveDebugMesh(debugWireframe, skinDebugMeshOverride ?? bodyMesh);
+    },
     setTattoo(state) {
-      resources.uTexture = state.texture.source;
-      resources.tattooUniforms.uniforms.uTattooSize[0] = state.tattooSize.width;
-      resources.tattooUniforms.uniforms.uTattooSize[1] = state.tattooSize.height;
-      resources.tattooUniforms.uniforms.uTattooTransform[0] = state.transform.x;
-      resources.tattooUniforms.uniforms.uTattooTransform[1] = state.transform.y;
-      resources.tattooUniforms.uniforms.uTattooTransform[2] = state.transform.scale;
-      resources.tattooUniforms.uniforms.uTattooTransform[3] = state.transform.rotation;
-      resources.tattooUniforms.uniforms.uTattooOpacity = state.transform.opacity;
-      shader.resources.uTexture = resources.uTexture;
+      applyTattooState(resources, shader, state);
+    },
+    clearTattoo() {
+      clearTattooState(resources, shader);
     },
     setDebugMeshVisible(visible) {
       debugWireframe.visible = visible;
     },
-    setMeshResolution(resolution) {
-      const nextMesh = buildSphereMesh({ sphere: input.sphere, resolution });
-      const previousGeometry = tattooMesh.geometry;
-      tattooMesh.geometry = createMeshGeometry(nextMesh);
-      previousGeometry.destroy();
-      drawWireframeOverlay(debugWireframe, nextMesh);
+    setSkinDebugMesh(mesh) {
+      skinDebugMeshOverride = mesh;
+      drawActiveDebugMesh(debugWireframe, skinDebugMeshOverride ?? bodyMesh);
     },
     destroy() {
       const geometry = tattooMesh.geometry;
@@ -136,16 +165,44 @@ export async function createPixiTattooRenderer(
   };
 }
 
+export function applyTattooState(
+  resources: TattooShaderResources,
+  shader: TattooShaderBindingTarget,
+  state: PixiTattooState,
+): void {
+  resources.uTexture = state.texture.source;
+  resources.tattooUniforms.uniforms.uTattooSize[0] = state.tattooSize.width;
+  resources.tattooUniforms.uniforms.uTattooSize[1] = state.tattooSize.height;
+  resources.tattooUniforms.uniforms.uTattooTransform[0] = state.transform.x;
+  resources.tattooUniforms.uniforms.uTattooTransform[1] = state.transform.y;
+  resources.tattooUniforms.uniforms.uTattooTransform[2] = state.transform.scale;
+  resources.tattooUniforms.uniforms.uTattooTransform[3] = state.transform.rotation;
+  resources.tattooUniforms.uniforms.uTattooOpacity = state.transform.opacity;
+  shader.resources.uTexture = resources.uTexture;
+}
+
+export function clearTattooState(
+  resources: TattooShaderResources,
+  shader: TattooShaderBindingTarget,
+): void {
+  resources.uTexture = Texture.EMPTY.source;
+  resources.tattooUniforms.uniforms.uTattooOpacity = 0;
+  shader.resources.uTexture = resources.uTexture;
+}
+
+export function configureBodyMaskForMasking(mask: Sprite): void {
+  // WHY: Pixi v8 中 `visible=false` 会让 mask 跳过渲染路径，导致整层贴图被完全裁空。
+  // TRADE-OFF: 保持 `visible=true` 以参与 mask 计算，同时 `renderable=false` 避免重复绘制到舞台。
+  mask.visible = hiddenMaskRenderableVisible;
+  mask.renderable = hiddenMaskRenderableFlag;
+}
+
 export function createTattooShaderResources(
   input: TattooShaderResourceInput,
 ): TattooShaderResources {
   return {
     uTexture: Texture.EMPTY.source,
     tattooUniforms: new UniformGroup({
-      uSphere: {
-        value: new Float32Array([input.sphere.cx, input.sphere.cy, input.sphere.r]),
-        type: "vec3<f32>",
-      },
       uTattooSize: {
         value: new Float32Array([input.tattooSize.width, input.tattooSize.height]),
         type: "vec2<f32>",
@@ -170,7 +227,7 @@ export function createTattooShaderResources(
 function createTattooShader(resources: TattooShaderResources): Shader {
   return new Shader({
     glProgram: compileHighShaderGlProgram({
-      name: "sphere-tattoo-projection",
+      name: "mesh-domain-tattoo-projection",
       bits: [
         localUniformBitGl,
         roundPixelsBitGl,
@@ -181,64 +238,24 @@ function createTattooShader(resources: TattooShaderResources): Shader {
   });
 }
 
-function createMeshGeometry(mesh: ReturnType<typeof buildSphereMesh>): MeshGeometry {
+export function createMeshGeometry(mesh: SkinMeshData, stageSize: Size): MeshGeometry {
   return new MeshGeometry({
     positions: mesh.positions,
-    uvs: mesh.sphereUv,
+    uvs: createUvBufferFromPositions(mesh.positions, stageSize),
     indices: mesh.indices,
   });
 }
 
-function createWireframeOverlay(mesh: ReturnType<typeof buildSphereMesh>): Graphics {
-  const graphics = new Graphics();
-  drawWireframeOverlay(graphics, mesh);
-  return graphics;
-}
-
-function drawWireframeOverlay(graphics: Graphics, mesh: ReturnType<typeof buildSphereMesh>): void {
-  const segments = buildSphereWireframeSegments(mesh);
-  graphics.clear();
-
-  for (let i = 0; i < segments.length; i += 4) {
-    graphics.moveTo(segments[i], segments[i + 1]);
-    graphics.lineTo(segments[i + 2], segments[i + 3]);
-  }
-
-  graphics.stroke({ color: 0x23424a, width: 1, alpha: 0.38 });
-}
-
 export const tattooProjectionFragmentMain = `
-      vec3 sphereNormal = normalFromPoint(vSpherePoint);
-      vec3 centerNormal = projectionCenterToNormal(uTattooTransform.xy);
-      vec3 projectedRight = vec3(1.0, 0.0, 0.0) - centerNormal * centerNormal.x;
-      vec3 projectedDown = vec3(0.0, 1.0, 0.0) - centerNormal * centerNormal.y;
-      float rightLength = length(projectedRight);
-      float downLength = length(projectedDown);
-      vec3 unrotatedU;
-      vec3 unrotatedV;
-
-      // WHY: 贴图控制框来自屏幕/Fabric 语义，边缘处径向屏幕轴会退化到深度方向。
-      // 选择投影长度更大的屏幕轴作为主轴，可在真实轮廓线上避免 90 度轴交换。
-      if (rightLength >= downLength) {
-        unrotatedU = safeNormalize(projectedRight);
-        unrotatedV = safeNormalize(cross(centerNormal, unrotatedU));
-      } else {
-        unrotatedV = safeNormalize(projectedDown);
-        unrotatedU = safeNormalize(cross(unrotatedV, centerNormal));
-      }
+      float safeScale = max(abs(uTattooTransform.z), 0.0001);
+      vec2 localPoint = (vSurfacePoint - uTattooTransform.xy) / safeScale;
       float c = cos(uTattooTransform.w);
       float s = sin(uTattooTransform.w);
-      vec3 tangentU = safeNormalize(unrotatedU * c + unrotatedV * s);
-      vec3 tangentV = safeNormalize(unrotatedU * -s + unrotatedV * c);
-      float tangentX = dot(sphereNormal, tangentU);
-      float tangentY = dot(sphereNormal, tangentV);
-      float tangentLength = length(vec2(tangentX, tangentY));
-      float forward = dot(sphereNormal, centerNormal);
-      float theta = atan(tangentLength, forward);
-      float angularScale = tangentLength < 0.0001 ? 1.0 : theta / tangentLength;
-      float localX = (uSphere.z * tangentX * angularScale) / uTattooTransform.z;
-      float localY = (uSphere.z * tangentY * angularScale) / uTattooTransform.z;
-      vec2 tattooUv = vec2(localX, localY) / uTattooSize + vec2(0.5);
+      vec2 rotatedPoint = vec2(
+        localPoint.x * c + localPoint.y * s,
+        localPoint.y * c - localPoint.x * s
+      );
+      vec2 tattooUv = rotatedPoint / uTattooSize + vec2(0.5);
 
       if (
         tattooUv.x < 0.0 ||
@@ -254,60 +271,18 @@ export const tattooProjectionFragmentMain = `
     `;
 
 export const tattooProjectionFragmentHeader = `
-      in vec2 vSpherePoint;
+      in vec2 vSurfacePoint;
       uniform sampler2D uTexture;
-      uniform vec3 uSphere;
       uniform vec2 uTattooSize;
       uniform vec4 uTattooTransform;
       uniform float uTattooOpacity;
-
-      vec3 safeNormalize(vec3 value) {
-        float magnitude = length(value);
-        return magnitude < 0.0001 ? vec3(0.0) : value / magnitude;
-      }
-
-      vec3 normalFromXy(vec2 xy) {
-        float z = sqrt(max(0.0, 1.0 - dot(xy, xy)));
-        return safeNormalize(vec3(xy, z));
-      }
-
-      vec3 normalFromPoint(vec2 point) {
-        vec2 rawXy = (point - uSphere.xy) / uSphere.z;
-        float xyLength = length(rawXy);
-        vec2 xy = xyLength > 1.0 ? rawXy / xyLength : rawXy;
-        return normalFromXy(xy);
-      }
-
-      vec2 clampProjectionCenterXy(vec2 rawXy) {
-        float xyLength = length(rawXy);
-
-        if (xyLength <= 1.0) {
-          return rawXy;
-        }
-
-        // TRADE-OFF: 控制框可拖出球面；水平拖出侧边时保留 y，只把中心卡到同高度真实轮廓线。
-        if (abs(rawXy.x) >= abs(rawXy.y)) {
-          float clampedY = clamp(rawXy.y, -1.0, 1.0);
-          float xLimit = sqrt(max(0.0, 1.0 - clampedY * clampedY));
-          return vec2(sign(rawXy.x) * xLimit, clampedY);
-        }
-
-        float clampedX = clamp(rawXy.x, -1.0, 1.0);
-        float yLimit = sqrt(max(0.0, 1.0 - clampedX * clampedX));
-        return vec2(clampedX, sign(rawXy.y) * yLimit);
-      }
-
-      vec3 projectionCenterToNormal(vec2 point) {
-        vec2 rawXy = (point - uSphere.xy) / uSphere.z;
-        return normalFromXy(clampProjectionCenterXy(rawXy));
-      }
     `;
 
 const tattooProjectionBit: HighShaderBit = {
   name: "tattoo-projection-bit",
   vertex: {
-    header: "out vec2 vSpherePoint;",
-    main: "vSpherePoint = position;",
+    header: "out vec2 vSurfacePoint;",
+    main: "vSurfacePoint = position;",
   },
   fragment: {
     header: tattooProjectionFragmentHeader,
@@ -315,68 +290,107 @@ const tattooProjectionBit: HighShaderBit = {
   },
 };
 
-function createBackdrop(stageSize: Size): Graphics {
-  return new Graphics()
-    .rect(0, 0, stageSize.width, stageSize.height)
-    .fill({ color: 0xdce4e2 });
+export function resolveProjectionMesh(
+  mesh: SkinMeshData | null,
+  fallbackMesh: SkinMeshData,
+): SkinMeshData {
+  if (!mesh || mesh.indices.length < 3 || mesh.positions.length < 6) {
+    return fallbackMesh;
+  }
+  return mesh;
 }
 
-function createSphereSprite(sphere: SphereSurface): Sprite {
-  const sprite = new Sprite(Texture.from(createSphereCanvas(sphere)));
-  sprite.x = sphere.cx - sphere.r;
-  sprite.y = sphere.cy - sphere.r;
-  return sprite;
+export function mapSphereMeshToSkinMesh(mesh: SphereMeshData): SkinMeshData {
+  return {
+    positions: new Float32Array(mesh.positions),
+    indices: new Uint32Array(mesh.indices),
+  };
 }
 
-function createSphereCanvas(sphere: SphereSurface): HTMLCanvasElement {
-  const size = sphere.r * 2;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const context = requiredContext(canvas);
-  const center = sphere.r;
-  const gradient = context.createRadialGradient(
-    center - sphere.r * 0.34,
-    center - sphere.r * 0.28,
-    sphere.r * 0.12,
-    center,
-    center,
-    sphere.r,
-  );
-  gradient.addColorStop(0, "#dba18f");
-  gradient.addColorStop(0.72, "#c98f7c");
-  gradient.addColorStop(1, "#9a6d62");
+function createUvBufferFromPositions(positions: Float32Array, stageSize: Size): Float32Array {
+  const uvs = new Float32Array(positions.length);
+  const safeWidth = Math.max(stageSize.width, 1);
+  const safeHeight = Math.max(stageSize.height, 1);
 
-  context.fillStyle = gradient;
-  context.beginPath();
-  context.arc(center, center, sphere.r, 0, Math.PI * 2);
-  context.fill();
-
-  context.strokeStyle = "#7f5c54";
-  context.lineWidth = 2;
-  context.stroke();
-  return canvas;
-}
-
-function createHardSphereMaskSprite(stageSize: Size, sphere: SphereSurface): Sprite {
-  const canvas = document.createElement("canvas");
-  canvas.width = stageSize.width;
-  canvas.height = stageSize.height;
-  const context = requiredContext(canvas);
-  context.fillStyle = "#ffffff";
-  context.beginPath();
-  context.arc(sphere.cx, sphere.cy, sphere.r, 0, Math.PI * 2);
-  context.fill();
-
-  return new Sprite(Texture.from(canvas));
-}
-
-function requiredContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-  const context = canvas.getContext("2d");
-
-  if (!context) {
-    throw new Error("Could not create a 2D canvas context.");
+  for (let i = 0; i < positions.length; i += 2) {
+    // WHY: 纹身采样已改为 position 驱动，UV 仅用于满足 MeshGeometry 顶点属性约束。
+    // TRADE-OFF: 使用舞台归一化 UV（而非业务语义 UV）最稳妥，避免不同 body mesh 缺失 UV 时渲染失败。
+    uvs[i] = positions[i] / safeWidth;
+    uvs[i + 1] = positions[i + 1] / safeHeight;
   }
 
-  return context;
+  return uvs;
+}
+
+export function createSkinWireframeSegments(mesh: SkinMeshData): Float32Array {
+  const segments: number[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i], mesh.indices[i + 1]);
+    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i + 1], mesh.indices[i + 2]);
+    pushMeshEdge(segments, seen, mesh.positions, mesh.indices[i + 2], mesh.indices[i]);
+  }
+
+  return new Float32Array(segments);
+}
+
+function createBackdrop(stageSize: Size): Graphics {
+  const graphics = new Graphics();
+  graphics.rect(0, 0, stageSize.width, stageSize.height);
+  graphics.fill({ color: 0xe7ece8 });
+
+  // WHY: 主画布统一使用网点背景，去掉白灰分层与 viewport 语义，让用户聚焦 body+tatoo 单一坐标系统。
+  // TRADE-OFF: 相比纯色底纹绘制多一些像素点，但可显著提升透明区域与边界可读性。
+  for (let y = 10; y < stageSize.height; y += 16) {
+    for (let x = 10; x < stageSize.width; x += 16) {
+      graphics.circle(x, y, 1.2);
+    }
+  }
+  graphics.fill({ color: 0xcad3cd, alpha: 0.55 });
+
+  return graphics;
+}
+
+function drawActiveDebugMesh(graphics: Graphics, mesh: SkinMeshData | null): void {
+  graphics.clear();
+  if (!mesh) {
+    return;
+  }
+
+  const segments = createSkinWireframeSegments(mesh);
+
+  for (let i = 0; i < segments.length; i += 4) {
+    graphics.moveTo(segments[i], segments[i + 1]);
+    graphics.lineTo(segments[i + 2], segments[i + 3]);
+  }
+
+  graphics.stroke({ color: 0x834336, width: 1, alpha: 0.7 });
+}
+
+export function createSphereWireframeSegments(mesh: SphereMeshData): Float32Array {
+  return buildSphereWireframeSegments(mesh);
+}
+
+function pushMeshEdge(
+  output: number[],
+  seen: Set<string>,
+  positions: Float32Array,
+  first: number,
+  second: number,
+): void {
+  const a = Math.min(first, second);
+  const b = Math.max(first, second);
+  const key = `${a}:${b}`;
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+
+  output.push(
+    positions[a * 2],
+    positions[a * 2 + 1],
+    positions[b * 2],
+    positions[b * 2 + 1],
+  );
 }

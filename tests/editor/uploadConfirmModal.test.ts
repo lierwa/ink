@@ -11,6 +11,9 @@ describe("openUploadConfirmModal", () => {
       value: vi.fn(() => ({
         clearRect: vi.fn(),
         drawImage: vi.fn(),
+        getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => ({
+          data: new Uint8ClampedArray(width * height * 4).fill(255),
+        })),
       })),
     });
   });
@@ -39,7 +42,7 @@ describe("openUploadConfirmModal", () => {
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
   });
 
-  test("Add resolves the cropped canvas from the selected mode", async () => {
+  test("Apply resolves the cropped canvas from the selected mode", async () => {
     const source = createCanvasStub(20, 18);
     const cropped = createCanvasStub(8, 7);
     const cropCanvas = vi.fn(() => cropped);
@@ -50,7 +53,7 @@ describe("openUploadConfirmModal", () => {
       cropCanvas,
     });
 
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await expect(promise).resolves.toEqual({
       canvas: cropped,
@@ -60,18 +63,22 @@ describe("openUploadConfirmModal", () => {
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
   });
 
-  test("does not render processing mode choices", async () => {
+  test("renders mode buttons and marks the initial line-art mode as active", async () => {
     const source = createCanvasStub(20, 18);
-    const cropCanvas = vi.fn((source: HTMLCanvasElement) => source);
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
     const promise = openUploadConfirmModal({
       fileName: "tattoo.png",
       initialMode: "line-art",
-      options: [createOption("line-art", source)],
+      options: [
+        createOption("line-art", source),
+        createOption("original", source),
+      ],
       cropCanvas,
     });
 
-    expect(document.querySelector("input[name='upload-processing-mode']")).toBeNull();
-    getButton("Add").click();
+    expect(getModeButton("Line-Art").classList.contains("is-active")).toBe(true);
+    expect(getModeButton("Original").classList.contains("is-active")).toBe(false);
+    getButton("Apply").click();
 
     await expect(promise).resolves.toEqual({
       canvas: source,
@@ -80,7 +87,33 @@ describe("openUploadConfirmModal", () => {
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 20, height: 18 });
   });
 
-  test("Add rejects and removes the modal when crop export fails", async () => {
+  test("switching to original changes applied mode while keeping same crop rect", async () => {
+    const lineArt = createCanvasStub(100, 80);
+    const original = createCanvasStub(100, 80);
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      options: [
+        createOption("line-art", lineArt),
+        createOption("original", original),
+      ],
+      cropCanvas,
+    });
+    const handle = getRequiredElement<HTMLElement>("[data-crop-resize='se']");
+
+    dragPointer(handle, 100, 80, 82, 68, 20);
+    getModeButton("Original").click();
+    getButton("Apply").click();
+
+    await expect(promise).resolves.toEqual({
+      canvas: original,
+      mode: "original",
+    });
+    expect(cropCanvas).toHaveBeenCalledWith(original, { x: 0, y: 0, width: 82, height: 68 });
+  });
+
+  test("Apply rejects and removes the modal when crop export fails", async () => {
     const cropError = new Error("crop failed");
     const promise = openUploadConfirmModal({
       fileName: "tattoo.png",
@@ -91,7 +124,7 @@ describe("openUploadConfirmModal", () => {
       }),
     });
 
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await expect(promise).rejects.toThrow("crop failed");
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
@@ -111,7 +144,7 @@ describe("openUploadConfirmModal", () => {
 
     dragPointer(handle, 100, 80, 70, 60, 3);
     dragPointer(cropBox, 10, 10, 18, 22, 1);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 8, y: 12, width: 70, height: 60 });
@@ -131,7 +164,7 @@ describe("openUploadConfirmModal", () => {
 
     dragPointer(handle, 100, 80, 30, 20, 4);
     dragPointer(cropBox, 0, 0, 200, 200, 5);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 70, y: 60, width: 30, height: 20 });
@@ -152,7 +185,7 @@ describe("openUploadConfirmModal", () => {
     dragPointer(handle, 100, 80, 40, 40, 6);
     dragPointer(cropBox, 0, 0, 25, 10, 7);
     dragPointer(handle, 65, 50, 200, 200, 8);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 25, y: 10, width: 75, height: 70 });
@@ -170,7 +203,7 @@ describe("openUploadConfirmModal", () => {
     const handle = getRequiredElement<HTMLElement>("[data-crop-resize='se']");
 
     dragPointer(handle, 100, 80, -50, -50, 9);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 1, height: 1 });
@@ -188,7 +221,7 @@ describe("openUploadConfirmModal", () => {
     const handle = getRequiredElement<HTMLElement>("[data-crop-resize='se']");
 
     dragPointer(handle, 100, 80, 82, 68, 2);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 82, height: 68 });
@@ -228,7 +261,7 @@ describe("openUploadConfirmModal", () => {
     const handle = getRequiredElement<HTMLElement>("[data-crop-resize='se']");
 
     dragPointer(handle, 50, 40, 41, 34, 12);
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 82, height: 68 });
@@ -257,7 +290,7 @@ describe("openUploadConfirmModal", () => {
       clientY: 20,
       pointerId: 13,
     }));
-    getButton("Add").click();
+    getButton("Apply").click();
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 100, height: 80 });
@@ -277,23 +310,36 @@ describe("openUploadConfirmModal", () => {
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
   });
 
-  test("falls back to the first available option without rendering mode controls", async () => {
+  test("falls back to original when selected line-art crop is nearly transparent", async () => {
+    const lineArt = createCanvasStub(20, 18);
     const source = createCanvasStub(20, 18);
-    const cropCanvas = vi.fn(() => source);
+    const cropCanvas = vi
+      .fn((canvas: HTMLCanvasElement): HTMLCanvasElement => {
+        if (canvas === lineArt) {
+          return createAlphaCoverageCanvas(20, 18, 0.002);
+        }
+        return source;
+      });
     const promise = openUploadConfirmModal({
       fileName: "tattoo.png",
       initialMode: "line-art",
       options: [
-        { mode: "line-art", label: "Line Art Cleanup failed", canvas: source, error: "failed" },
+        createOption("line-art", lineArt),
         createOption("original", source),
       ],
       cropCanvas,
     });
 
-    expect(document.querySelector("input[name='upload-processing-mode']")).toBeNull();
-    getButton("Add").click();
+    getButton("Apply").click();
 
-    await expect(promise).resolves.toEqual({ canvas: source, mode: "original" });
+    await expect(promise).resolves.toEqual({
+      canvas: source,
+      mode: "original",
+      fallbackFrom: "line-art",
+    });
+    expect(cropCanvas).toHaveBeenCalledTimes(2);
+    expect(cropCanvas).toHaveBeenNthCalledWith(1, lineArt, { x: 0, y: 0, width: 20, height: 18 });
+    expect(cropCanvas).toHaveBeenNthCalledWith(2, source, { x: 0, y: 0, width: 20, height: 18 });
   });
 });
 
@@ -315,6 +361,17 @@ function getButton(name: string): HTMLButtonElement {
 
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error(`Missing button ${name}`);
+  }
+
+  return button;
+}
+
+function getModeButton(name: string): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll(".upload-confirm-mode-switch button"))
+    .find((candidate) => candidate.textContent === name);
+
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Missing mode button ${name}`);
   }
 
   return button;
@@ -368,4 +425,35 @@ function createPointerEvent(type: string, init: PointerEventInit): PointerEvent 
     value: init.pointerId ?? 0,
   });
   return event;
+}
+
+function createAlphaCoverageCanvas(
+  width: number,
+  height: number,
+  coverage: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const total = width * height;
+  const visibleCount = Math.max(0, Math.min(total, Math.round(total * coverage)));
+  const alpha = new Uint8ClampedArray(total * 4);
+
+  for (let i = 0; i < visibleCount; i += 1) {
+    alpha[i * 4 + 3] = 255;
+  }
+
+  Object.defineProperty(canvas, "getContext", {
+    configurable: true,
+    value: vi.fn((contextId: string) => {
+      if (contextId !== "2d") {
+        return null;
+      }
+
+      return {
+        getImageData: vi.fn(() => ({ data: alpha })),
+      };
+    }),
+  });
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
 }

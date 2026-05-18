@@ -12,6 +12,7 @@ export interface ProcessedTattooOption {
 export interface UploadConfirmResult {
   canvas: HTMLCanvasElement;
   mode: UploadProcessingMode;
+  fallbackFrom?: UploadProcessingMode;
 }
 
 export interface UploadConfirmModalInput {
@@ -34,6 +35,9 @@ interface CropDragState {
 }
 
 type RemoveListeners = () => void;
+
+const lineArtFallbackAlphaThreshold = 26;
+const lineArtFallbackCoverageThreshold = 0.009;
 
 export function openUploadConfirmModal(
   input: UploadConfirmModalInput,
@@ -90,11 +94,12 @@ export function openUploadConfirmModal(
     };
     const renderSelectedOption = (): void => {
       selectedOption = getOption(options, selectedMode);
-      cropRect = getFullCanvasCrop(selectedOption.canvas);
+      cropRect = clampCropRectToCanvas(cropRect, selectedOption.canvas);
       drawPreview(previewCanvas, selectedOption.canvas);
       previewScale = getFittedPreviewScale(selectedOption.canvas, previewScale);
       renderPreviewScale(previewCanvas, selectedOption.canvas, previewScale);
       renderCropOverlay(overlay, cropRect, selectedOption.canvas, previewScale);
+      renderModeButtons(overlay, selectedMode);
     };
 
     overlay.addEventListener("click", (event) => {
@@ -111,9 +116,39 @@ export function openUploadConfirmModal(
     window.addEventListener("keydown", onKeyDown);
 
     getButton(overlay, "Cancel").addEventListener("click", () => close(null));
-    getButton(overlay, "Add").addEventListener("click", () => {
+    overlay.addEventListener("click", (event) => {
+      const target = event.target;
+
+      if (!(target instanceof HTMLButtonElement) || !target.dataset.uploadMode) {
+        return;
+      }
+
+      const nextMode = toUploadProcessingMode(target.dataset.uploadMode);
+      if (!nextMode || nextMode === selectedMode) {
+        return;
+      }
+
+      selectedMode = nextMode;
+      renderSelectedOption();
+    });
+    getButton(overlay, "Apply").addEventListener("click", () => {
       try {
-        close({ canvas: cropCanvas(selectedOption.canvas, cropRect), mode: selectedMode });
+        let canvas = cropCanvas(selectedOption.canvas, cropRect);
+        let mode = selectedMode;
+        let fallbackFrom: UploadProcessingMode | undefined;
+
+        if (selectedMode === "line-art" && isNearTransparentResult(canvas)) {
+          const originalOption = options.find((option) => option.mode === "original" && !option.error);
+          if (originalOption) {
+            // WHY: line-art 在少数输入上会“清理过度”接近全透明；自动回退 original 以保证 Apply 后始终可见。
+            // TRADE-OFF: 极端情况下保留了更多底噪，但避免用户得到“贴图丢失”的错误感知。
+            canvas = cropCanvas(originalOption.canvas, cropRect);
+            mode = "original";
+            fallbackFrom = "line-art";
+          }
+        }
+
+        close({ canvas, mode, fallbackFrom });
       } catch (error) {
         fail(error);
       }
@@ -136,7 +171,7 @@ function createModal(input: UploadConfirmModalInput): HTMLElement {
   dialog.setAttribute("aria-label", "Confirm Tattoo Effect");
   overlay.append(dialog);
 
-  dialog.append(createHeader(input.fileName), createPreview(), createProcessingControls(), createActions());
+  dialog.append(createHeader(input.fileName), createPreview(input.options), createProcessingControls(), createActions());
   return overlay;
 }
 
@@ -157,15 +192,29 @@ function createHeader(fileName: string): HTMLElement {
   return header;
 }
 
-function createPreview(): HTMLElement {
+function createPreview(options: ProcessedTattooOption[]): HTMLElement {
   const preview = document.createElement("div");
   const canvas = document.createElement("canvas");
+  const modeSwitch = document.createElement("div");
   const cropBox = document.createElement("div");
   const cropSize = document.createElement("span");
   const handle = document.createElement("button");
 
   preview.className = "upload-confirm-preview";
   canvas.dataset.uploadPreviewCanvas = "true";
+  modeSwitch.className = "upload-confirm-mode-switch";
+  modeSwitch.dataset.uploadModeSwitch = "true";
+  for (const option of options) {
+    const modeButton = document.createElement("button");
+    modeButton.type = "button";
+    modeButton.dataset.uploadMode = option.mode;
+    modeButton.textContent = option.mode === "line-art" ? "Line-Art" : "Original";
+    if (option.error) {
+      modeButton.disabled = true;
+      modeButton.title = option.error;
+    }
+    modeSwitch.append(modeButton);
+  }
   cropBox.className = "upload-crop-box";
   cropBox.dataset.cropBox = "true";
   cropBox.dataset.uploadCropBox = "true";
@@ -176,7 +225,7 @@ function createPreview(): HTMLElement {
   handle.dataset.cropResize = "se";
   handle.setAttribute("aria-label", "Resize crop");
   cropBox.append(cropSize, handle);
-  preview.append(canvas, cropBox);
+  preview.append(canvas, modeSwitch, cropBox);
   return preview;
 }
 
@@ -204,14 +253,14 @@ function createProcessingControls(): HTMLElement {
 function createActions(): HTMLElement {
   const actions = document.createElement("footer");
   const cancel = document.createElement("button");
-  const add = document.createElement("button");
+  const apply = document.createElement("button");
 
   actions.className = "upload-confirm-footer";
   cancel.type = "button";
   cancel.textContent = "Cancel";
-  add.type = "button";
-  add.textContent = "Add";
-  actions.append(cancel, add);
+  apply.type = "button";
+  apply.textContent = "Apply";
+  actions.append(cancel, apply);
   return actions;
 }
 
@@ -224,7 +273,7 @@ function drawPreview(previewCanvas: HTMLCanvasElement, source: HTMLCanvasElement
     return;
   }
 
-  // WHY: 预览绘制失败不应阻塞 Add 的纯结果契约；取舍是测试/无 Canvas 环境下只验证 DOM 与裁剪结果。
+  // WHY: 预览绘制失败不应阻塞 Apply 的纯结果契约；取舍是测试/无 Canvas 环境下只验证 DOM 与裁剪结果。
   try {
     context.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
     context.drawImage(source, 0, 0);
@@ -383,6 +432,26 @@ function getFullCanvasCrop(canvas: HTMLCanvasElement): CropRect {
   return { x: 0, y: 0, width: canvas.width, height: canvas.height };
 }
 
+function clampCropRectToCanvas(crop: CropRect, canvas: HTMLCanvasElement): CropRect {
+  const width = clamp(Math.round(crop.width), 1, Math.max(1, canvas.width));
+  const height = clamp(Math.round(crop.height), 1, Math.max(1, canvas.height));
+
+  return {
+    x: clamp(Math.round(crop.x), 0, Math.max(0, canvas.width - width)),
+    y: clamp(Math.round(crop.y), 0, Math.max(0, canvas.height - height)),
+    width,
+    height,
+  };
+}
+
+function renderModeButtons(root: HTMLElement, selectedMode: UploadProcessingMode): void {
+  const modeSwitch = getRequiredElement<HTMLElement>(root, "[data-upload-mode-switch]");
+
+  for (const button of modeSwitch.querySelectorAll<HTMLButtonElement>("button[data-upload-mode]")) {
+    button.classList.toggle("is-active", button.dataset.uploadMode === selectedMode);
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -417,6 +486,33 @@ function getFittedPreviewScale(source: HTMLCanvasElement, requestedScale: number
   return Math.max(0.05, Math.min(requestedScale, fitScale));
 }
 
+function isNearTransparentResult(canvas: HTMLCanvasElement): boolean {
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return false;
+  }
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const alphaCoverage = getAlphaCoverageRatio(imageData.data);
+  return alphaCoverage <= lineArtFallbackCoverageThreshold;
+}
+
+function getAlphaCoverageRatio(pixels: Uint8ClampedArray): number {
+  if (pixels.length === 0) {
+    return 0;
+  }
+
+  let visiblePixelCount = 0;
+
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] >= lineArtFallbackAlphaThreshold) {
+      visiblePixelCount += 1;
+    }
+  }
+
+  return visiblePixelCount / (pixels.length / 4);
+}
+
 function releaseCapture(cropBox: HTMLElement, pointerId: number): void {
   if (
     typeof cropBox.hasPointerCapture === "function"
@@ -431,6 +527,14 @@ function getInitialMode(input: UploadConfirmModalInput): UploadProcessingMode {
   return input.options.some((option) => option.mode === input.initialMode && !option.error)
     ? input.initialMode
     : input.options.find((option) => !option.error)?.mode ?? "original";
+}
+
+function toUploadProcessingMode(mode: string): UploadProcessingMode | null {
+  if (mode === "line-art" || mode === "original") {
+    return mode;
+  }
+
+  return null;
 }
 
 function getOption(
