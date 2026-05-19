@@ -63,7 +63,7 @@ function createGradientCanvas(): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = 120;
   canvas.height = 120;
-  vi.spyOn(canvas, "getContext").mockReturnValue({
+  mockCanvas2DContext(canvas, {
     getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
       const data = new Uint8ClampedArray(width * height * 4);
       for (let y = 0; y < height; y += 1) {
@@ -78,6 +78,19 @@ function createGradientCanvas(): HTMLCanvasElement {
       }
       return { width, height, data } as ImageData;
     }),
-  } as unknown as CanvasRenderingContext2D);
+  });
   return canvas;
+}
+
+function mockCanvas2DContext(
+  canvas: HTMLCanvasElement,
+  context: Pick<CanvasRenderingContext2D, "getImageData">,
+): void {
+  // WHY: HTMLCanvasElement.getContext 有多个 DOM overload，直接 spy 会被推断到 webgpu 分支；
+  // TRADE-OFF: defineProperty 只覆盖当前测试 canvas，避免影响全局原型但保留类型安全。
+  Object.defineProperty(canvas, "getContext", {
+    value: vi.fn((contextId: string) =>
+      contextId === "2d" ? (context as CanvasRenderingContext2D) : null,
+    ),
+  });
 }

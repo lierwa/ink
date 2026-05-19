@@ -64,16 +64,23 @@ describe("resolveShadingGeometryAssist", () => {
   });
 
   test("caps oversized max adjustment ratio", () => {
+    const clampedBaseline = resolveShadingGeometryAssist({
+      enabled: true,
+      sourceCanvas: createGradientCanvas(),
+      localBounds: { x: 0, y: 0, width: 20, height: 10 },
+      crossAxis: { x: 1, y: 0 },
+      maxAdjustmentRatio: 0.3,
+    });
     const result = resolveShadingGeometryAssist({
       enabled: true,
       sourceCanvas: createGradientCanvas(),
       localBounds: { x: 0, y: 0, width: 20, height: 10 },
       crossAxis: { x: 1, y: 0 },
-      maxAdjustmentRatio: 10,
+      maxAdjustmentRatio: 99,
     });
 
     expect(result.debug.used).toBe(true);
-    expect(result.curvatureMultiplier).toBeLessThanOrEqual(1.3);
+    expect(result.curvatureMultiplier).toBeCloseTo(clampedBaseline.curvatureMultiplier);
   });
 });
 
@@ -81,7 +88,7 @@ function createGradientCanvas(): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = 20;
   canvas.height = 10;
-  vi.spyOn(canvas, "getContext").mockReturnValue({
+  mockCanvas2DContext(canvas, {
     getImageData: vi.fn(() => {
       const data = new Uint8ClampedArray(canvas.width * canvas.height * 4);
       for (let y = 0; y < canvas.height; y += 1) {
@@ -96,7 +103,7 @@ function createGradientCanvas(): HTMLCanvasElement {
       }
       return { width: canvas.width, height: canvas.height, data } as ImageData;
     }),
-  } as unknown as CanvasRenderingContext2D);
+  });
   return canvas;
 }
 
@@ -104,10 +111,23 @@ function createThrowingCanvas(): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = 20;
   canvas.height = 10;
-  vi.spyOn(canvas, "getContext").mockReturnValue({
+  mockCanvas2DContext(canvas, {
     getImageData: vi.fn(() => {
       throw new Error("readback blocked");
     }),
-  } as unknown as CanvasRenderingContext2D);
+  });
   return canvas;
+}
+
+function mockCanvas2DContext(
+  canvas: HTMLCanvasElement,
+  context: Pick<CanvasRenderingContext2D, "getImageData">,
+): void {
+  // WHY: getContext 的 DOM overload 会让 vi.spyOn 的返回类型误落到 webgpu；
+  // TRADE-OFF: 只替换单个 canvas 实例，测试隔离性更好但需要一个小 helper。
+  Object.defineProperty(canvas, "getContext", {
+    value: vi.fn((contextId: string) =>
+      contextId === "2d" ? (context as CanvasRenderingContext2D) : null,
+    ),
+  });
 }
