@@ -8,6 +8,7 @@ import type {
   SkinMeshData,
   SurfaceAxis,
 } from "./types";
+import { resolveShadingGeometryAssist } from "./shadingGeometryAssist";
 
 export interface LocalSurfaceDescriptorInput {
   mask: SkinMask;
@@ -34,21 +35,31 @@ export function resolveLocalSurfaceDescriptor(input: LocalSurfaceDescriptorInput
   const proxy = aspect >= 1.45 ? "ellipticalCylinder" : "curvedPlane";
   const edgeTurn = estimateEdgeTurn(input.tattooBounds, localBounds);
   const acrossAxis = clamp(0.22 + edgeTurn * 0.42 + (proxy === "ellipticalCylinder" ? 0.12 : 0), 0.08, 0.86);
+  const normalAxis = { x: -axis.direction.y, y: axis.direction.x };
+  const shading = resolveShadingGeometryAssist({
+    enabled: Boolean(input.shadingAssist?.enabled),
+    sourceCanvas: input.shadingAssist?.sourceCanvas,
+    localBounds,
+    crossAxis: normalAxis,
+    maxAdjustmentRatio: input.shadingAssist?.maxAdjustmentRatio,
+  });
+  const assistedAcrossAxis = clamp(acrossAxis * shading.curvatureMultiplier, 0.08, 0.86);
 
   // WHY: 2D mask/mesh 只能稳定给出局部宽度与边界距离，不能证明真实人体曲率。
   // TRADE-OFF: 先输出保守 proxy descriptor，后续 renderer 可用同一接口替换为 UV/mesh remap。
   return {
-    source: "geometry",
+    source: shading.debug.used ? "geometry-shading" : "geometry",
     proxy,
     axis,
     localBounds,
     localWidth,
     edgeTurn,
     curvature: {
-      acrossAxis,
+      acrossAxis: assistedAcrossAxis,
       alongAxis: proxy === "ellipticalCylinder" ? 0.04 : 0.1,
     },
     confidence: clamp(0.48 + edgeTurn * 0.24 + Math.min(aspect, 3) * 0.06, 0, 1),
+    shading: shading.debug,
   };
 }
 
