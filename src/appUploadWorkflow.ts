@@ -10,6 +10,7 @@ import {
   type ProcessedTattooOption,
   type UploadProcessingMode,
 } from "./editor/uploadConfirmModal";
+import type { CropRect } from "./image/cropCanvas";
 import type { Size, TattooTransform } from "./domain/types";
 import { cleanupLineArtBackground } from "./image/lineArtCleanup";
 import { defaultTattooSize } from "./defaultTattoo";
@@ -20,6 +21,10 @@ export interface UploadWorkflowState {
     texture: Texture;
     size: Size;
     dataUrl: string;
+    sourceCanvas: HTMLCanvasElement;
+    fileName: string;
+    selectedMode: UploadProcessingMode;
+    cropRect: CropRect;
   } | null;
   transformRevision: number;
 }
@@ -27,6 +32,8 @@ export interface UploadWorkflowState {
 export interface UploadWorkflowElements {
   tattooUploadInput: HTMLInputElement;
   statusLabel: HTMLElement;
+  editTattooButton: HTMLButtonElement;
+  removeTattooButton: HTMLButtonElement;
 }
 
 export interface UploadWorkflowInput {
@@ -66,7 +73,38 @@ export function installUploadWorkflow(input: UploadWorkflowInput): void {
 
   input.elements.tattooUploadInput.addEventListener("change", () => {
     uploadedFile = input.elements.tattooUploadInput.files?.[0] ?? null;
+    input.elements.tattooUploadInput.value = "";
     void refresh();
+  });
+
+  input.elements.editTattooButton.addEventListener("click", () => {
+    if (!input.state.tattooAsset) {
+      return;
+    }
+
+    const asset = input.state.tattooAsset;
+    const requestId = latestUploadRequestId + 1;
+    latestUploadRequestId = requestId;
+    // WHY: 编辑裁剪复用原始 source canvas，但必须进入同一请求序列，避免旧上传结果覆盖用户刚提交的编辑。
+    // TRADE-OFF: 每次编辑都会使仍在处理的上传失效，这是单一 tattoo 资产模型下更可预测的行为。
+    void updateTattooFromSource(
+      asset.fileName,
+      asset.sourceCanvas,
+      input,
+      requestId,
+      isCurrentRequest,
+      runCurrentFabricUpdate,
+      {
+        initialMode: asset.selectedMode,
+        initialCropRect: asset.cropRect,
+      },
+    );
+  });
+
+  input.elements.removeTattooButton.addEventListener("click", () => {
+    clearCurrentTattoo(input, latestUploadRequestId + 1, () => true);
+    latestUploadRequestId += 1;
+    input.elements.tattooUploadInput.value = "";
   });
 }
 
@@ -78,17 +116,42 @@ async function updateUploadedTattoo(
   runCurrentFabricUpdate: RunCurrentFabricUpdate,
 ): Promise<void> {
   try {
-    const startTransformRevision = input.state.transformRevision;
-    input.elements.statusLabel.textContent = "processing tattoo upload...";
-    const processedOptions = await createProcessedOptions(uploadedFile);
-
+    const originalCanvas = await fileToCanvas(uploadedFile);
+    const normalizedCanvas = normalizeTattooCanvas(originalCanvas, tattooUploadMaxEdge);
+    await updateTattooFromSource(
+      uploadedFile.name,
+      normalizedCanvas,
+      input,
+      requestId,
+      isCurrentRequest,
+      runCurrentFabricUpdate,
+    );
+  } catch (error) {
     if (!isCurrentRequest(requestId)) {
       return;
     }
 
+    input.elements.statusLabel.textContent = `tattoo upload failed: ${getErrorMessage(error)}`;
+  }
+}
+
+async function updateTattooFromSource(
+  fileName: string,
+  sourceCanvas: HTMLCanvasElement,
+  input: UploadWorkflowInput,
+  requestId: number,
+  isCurrentRequest: IsCurrentRequest,
+  runCurrentFabricUpdate: RunCurrentFabricUpdate,
+  editState?: { initialMode: UploadProcessingMode; initialCropRect: CropRect },
+): Promise<void> {
+  try {
+    const startTransformRevision = input.state.transformRevision;
+    input.elements.statusLabel.textContent = "processing tattoo upload...";
+    const processedOptions = createProcessedOptionsFromCanvas(sourceCanvas);
     const confirmed = await openUploadConfirmModal({
-      fileName: uploadedFile.name,
-      initialMode: getInitialUploadMode(processedOptions.options),
+      fileName,
+      initialMode: editState?.initialMode ?? getInitialUploadMode(processedOptions.options),
+      initialCropRect: editState?.initialCropRect,
       options: processedOptions.options,
     });
 
@@ -127,6 +190,10 @@ async function updateUploadedTattoo(
       texture: Texture.from(canvas),
       dataUrl,
       size: { width: canvas.width, height: canvas.height },
+      sourceCanvas,
+      fileName,
+      selectedMode: confirmed.mode,
+      cropRect: confirmed.cropRect,
     };
     input.state.tattooTransform = committedTransform;
 
@@ -167,26 +234,13 @@ function clearCurrentTattoo(
   input.renderTattoo();
 }
 
-async function createProcessedOptions(
-  file: File,
-): Promise<ProcessedUploadOptions> {
-  const originalCanvas = await fileToCanvas(file);
-  const normalizedCanvas = normalizeTattooCanvas(originalCanvas, tattooUploadMaxEdge);
-
-  const options: ProcessedTattooOption[] = [
-    {
-      mode: "original",
-      label: "Original",
-      canvas: normalizedCanvas,
-    },
-    {
-      mode: "line-art",
-      label: "Line Art Cleanup",
-      canvas: createLineArtCanvas(normalizedCanvas),
-    },
-  ];
-
-  return { options };
+function createProcessedOptionsFromCanvas(normalizedCanvas: HTMLCanvasElement): ProcessedUploadOptions {
+  return {
+    options: [
+      { mode: "original", label: "Original", canvas: normalizedCanvas },
+      { mode: "line-art", label: "Line Art Cleanup", canvas: createLineArtCanvas(normalizedCanvas) },
+    ],
+  };
 }
 
 function getInitialUploadMode(options: ProcessedTattooOption[]): UploadProcessingMode {

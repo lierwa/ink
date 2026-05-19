@@ -13,6 +13,7 @@ export interface ProcessedTattooOption {
 export interface UploadConfirmResult {
   canvas: HTMLCanvasElement;
   mode: UploadProcessingMode;
+  cropRect: CropRect;
   fallbackFrom?: UploadProcessingMode;
 }
 
@@ -20,6 +21,7 @@ export interface UploadConfirmModalInput {
   fileName: string;
   initialMode: UploadProcessingMode;
   options: ProcessedTattooOption[];
+  initialCropRect?: CropRect;
   cropCanvas?: (source: HTMLCanvasElement, crop: CropRect) => HTMLCanvasElement;
 }
 
@@ -162,14 +164,14 @@ export function openUploadConfirmModal(
           }
         }
 
-        close({ canvas, mode, fallbackFrom });
+        close({ canvas, mode, cropRect, fallbackFrom });
       } catch (error) {
         fail(error);
       }
     });
 
     document.body.appendChild(overlay);
-    renderSelectedOption();
+    renderSelectedOption(input.initialCropRect);
   });
 }
 

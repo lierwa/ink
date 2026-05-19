@@ -63,6 +63,7 @@ describe("openUploadConfirmModal", () => {
     await expect(promise).resolves.toEqual({
       canvas: cropped,
       mode: "line-art",
+      cropRect: { x: 0, y: 0, width: 20, height: 18 },
     });
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 20, height: 18 });
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
@@ -88,6 +89,7 @@ describe("openUploadConfirmModal", () => {
     await expect(promise).resolves.toEqual({
       canvas: source,
       mode: "line-art",
+      cropRect: { x: 0, y: 0, width: 20, height: 18 },
     });
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 0, y: 0, width: 20, height: 18 });
   });
@@ -138,6 +140,7 @@ describe("openUploadConfirmModal", () => {
     await expect(promise).resolves.toEqual({
       canvas: original,
       mode: "original",
+      cropRect: { x: 4, y: 6, width: 82, height: 68 },
     });
     expect(cropCanvas).toHaveBeenCalledWith(original, { x: 4, y: 6, width: 82, height: 68 });
   });
@@ -235,6 +238,7 @@ describe("openUploadConfirmModal", () => {
     await expect(promise).resolves.toEqual({
       canvas: source,
       mode: "original",
+      cropRect: { x: 0, y: 0, width: 20, height: 18 },
       fallbackFrom: "line-art",
     });
     expect(cropCanvas).toHaveBeenCalledTimes(2);
@@ -269,6 +273,7 @@ describe("openUploadConfirmModal", () => {
     await expect(promise).resolves.toEqual({
       canvas: croppedOriginal,
       mode: "original",
+      cropRect: { x: 14, y: 12, width: 40, height: 30 },
       fallbackFrom: "line-art",
     });
     expect(cropCanvas).toHaveBeenNthCalledWith(1, lineArt, { x: 14, y: 12, width: 40, height: 30 });

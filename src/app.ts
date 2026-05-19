@@ -11,6 +11,8 @@ import { createAppMarkup, createCanvasMarkup, defaultSurfaceFitStrength } from "
 import { isSameTattooTransform } from "./appUploadQueue";
 import { installUploadWorkflow } from "./appUploadWorkflow";
 import { installBodyUploadWorkflow } from "./appBodyUploadWorkflow";
+import type { CropRect } from "./image/cropCanvas";
+import type { UploadProcessingMode } from "./editor/uploadConfirmModal";
 import {
   createLiveSurfaceRefreshScheduler,
   formatSurfaceFitStrength,
@@ -66,6 +68,10 @@ interface TattooAssetState {
   texture: Texture;
   size: Size;
   dataUrl: string;
+  sourceCanvas: HTMLCanvasElement;
+  fileName: string;
+  selectedMode: UploadProcessingMode;
+  cropRect: CropRect;
 }
 
 interface AppState {
@@ -83,6 +89,8 @@ interface AppElements {
   fabricLayer: HTMLCanvasElement;
   bodyUploadInput: HTMLInputElement;
   tattooUploadInput: HTMLInputElement;
+  editTattooButton: HTMLButtonElement;
+  removeTattooButton: HTMLButtonElement;
   debugMeshInput: HTMLInputElement;
   opacityInput: HTMLInputElement;
   surfaceFitInput: HTMLInputElement;
@@ -149,6 +157,8 @@ export async function startApp(): Promise<void> {
     elements: {
       tattooUploadInput: elements.tattooUploadInput,
       statusLabel: elements.statusLabel,
+      editTattooButton: elements.editTattooButton,
+      removeTattooButton: elements.removeTattooButton,
     },
     fabric,
     initialTransform,
@@ -200,6 +210,8 @@ function getAppElements(): AppElements {
     fabricLayer: getElement<HTMLCanvasElement>("fabricLayer"),
     bodyUploadInput: getElement<HTMLInputElement>("bodyUpload"),
     tattooUploadInput: getElement<HTMLInputElement>("tattooUpload"),
+    editTattooButton: getElement<HTMLButtonElement>("editTattoo"),
+    removeTattooButton: getElement<HTMLButtonElement>("removeTattoo"),
     debugMeshInput: getElement<HTMLInputElement>("debugMesh"),
     opacityInput: getElement<HTMLInputElement>("opacity"),
     surfaceFitInput: getElement<HTMLInputElement>("surfaceFitStrength"),
@@ -420,6 +432,8 @@ function describeWarp(meanNormalXY: number): "weak" | "medium" | "strong" {
 function syncPanelFromTransform(state: AppState, elements: AppElements): void {
   elements.transformPanel.hidden = state.tattooAsset === null;
   elements.transformPanel.setAttribute("aria-hidden", String(state.tattooAsset === null));
+  elements.editTattooButton.disabled = state.tattooAsset === null;
+  elements.removeTattooButton.disabled = state.tattooAsset === null;
   elements.paramX.value = String(Math.round(state.tattooTransform.x));
   elements.paramY.value = String(Math.round(state.tattooTransform.y));
   elements.paramScale.value = state.tattooTransform.scale.toFixed(2);
@@ -497,4 +511,3 @@ function getElement<T extends HTMLElement>(id: string): T {
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
-

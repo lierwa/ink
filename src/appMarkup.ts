@@ -42,6 +42,10 @@ export function createAppMarkup(
             <span>Upload tattoo</span>
             <input id="tattooUpload" type="file" accept="image/png,image/jpeg,image/webp" />
           </label>
+          <div class="action-row">
+            <button id="editTattoo" type="button" disabled>Edit crop</button>
+            <button id="removeTattoo" type="button" disabled>Remove</button>
+          </div>
           <label class="toggle-line">
             <input id="debugMesh" type="checkbox" />
             <span>Show body mesh</span>

@@ -89,7 +89,12 @@ describe("installUploadWorkflow", () => {
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { tattooUploadInput, statusLabel },
+      elements: {
+        tattooUploadInput,
+        statusLabel,
+        editTattooButton: document.createElement("button"),
+        removeTattooButton: document.createElement("button"),
+      },
       fabric,
       initialTransform: transform,
       renderTattoo: vi.fn(),
@@ -122,7 +127,12 @@ describe("installUploadWorkflow", () => {
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { tattooUploadInput, statusLabel },
+      elements: {
+        tattooUploadInput,
+        statusLabel,
+        editTattooButton: document.createElement("button"),
+        removeTattooButton: document.createElement("button"),
+      },
       fabric: createFabricStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
@@ -148,11 +158,20 @@ describe("installUploadWorkflow", () => {
 
     installImageDecodeStubs(320, 240);
     installCanvasDocumentStub();
-    openUploadConfirmModal.mockResolvedValue({ canvas: confirmedCanvas, mode: "original" });
+    openUploadConfirmModal.mockResolvedValue({
+      canvas: confirmedCanvas,
+      mode: "original",
+      cropRect: { x: 0, y: 0, width: 320, height: 240 },
+    });
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { tattooUploadInput, statusLabel },
+      elements: {
+        tattooUploadInput,
+        statusLabel,
+        editTattooButton: document.createElement("button"),
+        removeTattooButton: document.createElement("button"),
+      },
       fabric: createFabricStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
@@ -175,12 +194,18 @@ describe("installUploadWorkflow", () => {
     openUploadConfirmModal.mockResolvedValue({
       canvas: confirmedCanvas,
       mode: "original",
+      cropRect: { x: 0, y: 0, width: 320, height: 240 },
       fallbackFrom: "line-art",
     });
 
     installUploadWorkflow({
       state: createWorkflowState(),
-      elements: { tattooUploadInput, statusLabel },
+      elements: {
+        tattooUploadInput,
+        statusLabel,
+        editTattooButton: document.createElement("button"),
+        removeTattooButton: document.createElement("button"),
+      },
       fabric: createFabricStub(),
       initialTransform: transform,
       renderTattoo: vi.fn(),
@@ -191,6 +216,73 @@ describe("installUploadWorkflow", () => {
     tattooUploadInput.dispatchEvent(new Event("change"));
     await waitFor(() => expect(statusLabel.textContent).toBe("applied tattoo (line-art -> original fallback)"));
   });
+
+  test("clears file input value after handling so the same file can be selected again", async () => {
+    const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
+    const tattooUploadInput = document.createElement("input");
+    const statusLabel = document.createElement("div");
+    const confirmedCanvas = createCanvasStub(320, 240);
+
+    installImageDecodeStubs(320, 240);
+    installCanvasDocumentStub();
+    openUploadConfirmModal.mockResolvedValue({
+      canvas: confirmedCanvas,
+      mode: "original",
+      cropRect: { x: 0, y: 0, width: 320, height: 240 },
+    });
+
+    installUploadWorkflow({
+      state: createWorkflowState(),
+      elements: {
+        tattooUploadInput,
+        statusLabel,
+        editTattooButton: document.createElement("button"),
+        removeTattooButton: document.createElement("button"),
+      },
+      fabric: createFabricStub(),
+      initialTransform: transform,
+      renderTattoo: vi.fn(),
+      syncPanelFromTransform: vi.fn(),
+    });
+
+    Object.defineProperty(tattooUploadInput, "value", {
+      configurable: true,
+      writable: true,
+      value: "C:\\fakepath\\same.png",
+    });
+    setInputFiles(tattooUploadInput, [new File(["image"], "same.png", { type: "image/png" })]);
+    tattooUploadInput.dispatchEvent(new Event("change"));
+    await waitFor(() => expect(statusLabel.textContent).toBe("applied tattoo (original)"));
+
+    expect(tattooUploadInput.value).toBe("");
+  });
+
+  test("remove tattoo clears fabric, state, and render output", async () => {
+    const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
+    const tattooUploadInput = document.createElement("input");
+    const editTattooButton = document.createElement("button");
+    const removeTattooButton = document.createElement("button");
+    const statusLabel = document.createElement("div");
+    const fabric = createFabricStub();
+    const state = createWorkflowState();
+    const renderTattoo = vi.fn();
+
+    installUploadWorkflow({
+      state,
+      elements: { tattooUploadInput, statusLabel, editTattooButton, removeTattooButton },
+      fabric,
+      initialTransform: transform,
+      renderTattoo,
+      syncPanelFromTransform: vi.fn(),
+    });
+
+    removeTattooButton.click();
+
+    expect(fabric.clearTattoo).toHaveBeenCalled();
+    expect(state.tattooAsset).toBeNull();
+    expect(renderTattoo).toHaveBeenCalled();
+    expect(statusLabel.textContent).toBe("Upload tattoo to enable transform controls");
+  });
 });
 
 function createWorkflowState() {
@@ -200,6 +292,10 @@ function createWorkflowState() {
       size: { width: 10, height: 10 },
       texture: {} as Texture,
       dataUrl: "data:image/png;base64,old",
+      sourceCanvas: createCanvasStub(10, 10),
+      fileName: "old.png",
+      selectedMode: "original" as const,
+      cropRect: { x: 0, y: 0, width: 10, height: 10 },
     },
     transformRevision: 1,
   };
