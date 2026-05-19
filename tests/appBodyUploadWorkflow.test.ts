@@ -77,12 +77,15 @@ describe("installBodyUploadWorkflow", () => {
       state: state as never,
       elements: {
         bodyUploadInput,
+        editBodyButton: document.createElement("button"),
+        removeBodyButton: document.createElement("button"),
         statusLabel: document.createElement("div"),
-      },
+      } as never,
       pixi: pixi as never,
       initialTransform: state.tattooTransform,
       setTransform: vi.fn(),
       renderBodySurface: vi.fn(),
+      resetBodySurface: vi.fn(),
     });
 
     bodyUploadInput.dispatchEvent(new Event("change"));
@@ -92,7 +95,78 @@ describe("installBodyUploadWorkflow", () => {
     });
     expect(lifecycleCalls.slice(0, 2)).toEqual(["unbind normal", "destroy previous normal"]);
   });
+
+  test("edit body reopens modal with stored source canvas and params", async () => {
+    const state = createBodyWorkflowState();
+    const editBodyButton = document.createElement("button");
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        editBodyButton,
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface: vi.fn(),
+      resetBodySurface: vi.fn(),
+    });
+
+    editBodyButton.click();
+
+    await vi.waitFor(() => expect(mocks.openBodyUploadModal).toHaveBeenCalledTimes(1));
+    expect(mocks.openBodyUploadModal.mock.calls[0][0].sourceCanvas).toBe(state.bodySurfaceState.sourceCanvas);
+    expect(mocks.openBodyUploadModal.mock.calls[0][0].initialParams).toEqual(state.bodySurfaceState.pipelineParams);
+  });
+
+  test("remove body delegates to app-level body reset", () => {
+    const state = createBodyWorkflowState();
+    const removeBodyButton = document.createElement("button");
+    const resetBodySurface = vi.fn();
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        editBodyButton: document.createElement("button"),
+        removeBodyButton,
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface: vi.fn(),
+      resetBodySurface,
+    });
+
+    removeBodyButton.click();
+
+    expect(resetBodySurface).toHaveBeenCalledTimes(1);
+  });
 });
+
+function createBodyWorkflowState() {
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = 64;
+  sourceCanvas.height = 32;
+  return {
+    tattooTransform: { x: 450, y: 310, scale: 0.42, rotation: 0, opacity: 1 },
+    bodySurfaceState: {
+      texture: { source: { id: "body" } },
+      sourceCanvas,
+      fileName: "body.png",
+      surfaceNormalTexture: null,
+      placementRect: { x: 0, y: 0, width: 900, height: 620 },
+      sourceSize: { width: 64, height: 32 },
+      mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+      mesh: createTriangleMesh(64, 32),
+      pipelineParams: { ...defaultBodyMeshPipelineParams },
+      analysisDebug: null,
+      revision: 0,
+    },
+  };
+}
 
 function createTriangleMesh(width: number, height: number) {
   return {

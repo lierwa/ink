@@ -15,6 +15,8 @@ import type {
 
 interface BodySurfaceState {
   texture: Texture;
+  sourceCanvas: HTMLCanvasElement;
+  fileName: string;
   surfaceNormalTexture: Texture | null;
   placementRect: Rect;
   sourceSize: Size;
@@ -32,6 +34,8 @@ interface BodyUploadState {
 
 interface BodyUploadElements {
   bodyUploadInput: HTMLInputElement;
+  editBodyButton: HTMLButtonElement;
+  removeBodyButton: HTMLButtonElement;
   statusLabel: HTMLDivElement;
 }
 
@@ -48,10 +52,64 @@ export interface BodyUploadWorkflowInput {
   initialTransform: TattooTransform;
   setTransform: SetTattooTransform;
   renderBodySurface: () => void;
+  resetBodySurface: () => void;
 }
 
 export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void {
   let latestRequestToken = 0;
+
+  const openBodyEditorFromCanvas = async (
+    fileName: string,
+    sourceCanvas: HTMLCanvasElement,
+    initialParams: BodyMeshPipelineParams,
+  ): Promise<void> => {
+    const requestToken = latestRequestToken + 1;
+    latestRequestToken = requestToken;
+    const isCurrentRequest = (): boolean => requestToken === latestRequestToken;
+
+    try {
+      input.elements.statusLabel.textContent = "processing body upload...";
+      const modalResult = await openBodyUploadModal({
+        fileName,
+        sourceCanvas,
+        initialParams,
+        buildPreview: createBodyMeshPreviewBuilder(),
+      });
+
+      if (!isCurrentRequest()) {
+        return;
+      }
+
+      if (!modalResult) {
+        input.elements.statusLabel.textContent = "body upload cancelled";
+        return;
+      }
+
+      const surfaceSummary = applyBodySurfaceResult(input.state, input.pixi, {
+        fileName,
+        sourceCanvas: modalResult.sourceCanvas,
+        params: modalResult.params,
+        preview: modalResult.preview,
+      });
+      const centeredTransform = createBodyCenteredTattooTransform(
+        input.state.bodySurfaceState.placementRect,
+        input.state.tattooTransform.opacity,
+        input.initialTransform,
+      );
+
+      // WHY: Apply Body 后重置贴图中心，避免旧 body 的位置语义遗留到新 body 导致“贴图飞离人体”的错觉。
+      // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
+      input.setTransform(centeredTransform, "body-apply");
+      input.renderBodySurface();
+      input.elements.statusLabel.textContent = surfaceSummary.status;
+    } catch (error) {
+      if (!isCurrentRequest()) {
+        return;
+      }
+
+      input.elements.statusLabel.textContent = `body upload failed: ${getErrorMessage(error)}`;
+    }
+  };
 
   input.elements.bodyUploadInput.addEventListener("change", () => {
     const file = input.elements.bodyUploadInput.files?.[0] ?? null;
@@ -73,34 +131,11 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
           return;
         }
 
-        const modalResult = await openBodyUploadModal({
-          fileName: file.name,
+        await openBodyEditorFromCanvas(
+          file.name,
           sourceCanvas,
-          initialParams: input.state.bodySurfaceState.pipelineParams,
-          buildPreview: createBodyMeshPreviewBuilder(),
-        });
-
-        if (!isCurrentRequest()) {
-          return;
-        }
-
-        if (!modalResult) {
-          input.elements.statusLabel.textContent = "body upload cancelled";
-          return;
-        }
-
-        const surfaceSummary = applyBodySurfaceResult(input.state, input.pixi, modalResult);
-        const centeredTransform = createBodyCenteredTattooTransform(
-          input.state.bodySurfaceState.placementRect,
-          input.state.tattooTransform.opacity,
-          input.initialTransform,
+          input.state.bodySurfaceState.pipelineParams,
         );
-
-        // WHY: Apply Body 后重置贴图中心，避免旧 body 的位置语义遗留到新 body 导致“贴图飞离人体”的错觉。
-        // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
-        input.setTransform(centeredTransform, "body-apply");
-        input.renderBodySurface();
-        input.elements.statusLabel.textContent = surfaceSummary.status;
       } catch (error) {
         if (!isCurrentRequest()) {
           return;
@@ -110,12 +145,27 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
       }
     })();
   });
+
+  input.elements.editBodyButton.addEventListener("click", () => {
+    // WHY: 编辑 body mesh 必须复用原始 canvas 和当前参数，否则用户每次微调都会回到默认 pipeline。
+    // TRADE-OFF: 只保留单份 source canvas，符合当前单 body 状态模型，避免新增历史版本复杂度。
+    void openBodyEditorFromCanvas(
+      input.state.bodySurfaceState.fileName,
+      input.state.bodySurfaceState.sourceCanvas,
+      input.state.bodySurfaceState.pipelineParams,
+    );
+  });
+
+  input.elements.removeBodyButton.addEventListener("click", () => {
+    input.resetBodySurface();
+  });
 }
 
 function applyBodySurfaceResult(
   state: BodyUploadState,
   pixi: PixiTattooRenderer,
   result: {
+    fileName: string;
     sourceCanvas: HTMLCanvasElement;
     params: BodyMeshPipelineParams;
     preview: {
@@ -143,6 +193,8 @@ function applyBodySurfaceResult(
 
   state.bodySurfaceState = {
     texture: Texture.from(result.sourceCanvas),
+    sourceCanvas: result.sourceCanvas,
+    fileName: result.fileName,
     surfaceNormalTexture: null,
     placementRect,
     sourceSize: { width: result.sourceCanvas.width, height: result.sourceCanvas.height },

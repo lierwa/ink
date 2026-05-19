@@ -38,6 +38,10 @@ export function createAppMarkup(
             <span>Upload body photo</span>
             <input id="bodyUpload" type="file" accept="image/png,image/jpeg,image/webp" />
           </label>
+          <div class="action-row">
+            <button id="editBody" type="button">Edit mesh</button>
+            <button id="removeBody" type="button">Remove</button>
+          </div>
           <label class="file-drop">
             <span>Upload tattoo</span>
             <input id="tattooUpload" type="file" accept="image/png,image/jpeg,image/webp" />
@@ -62,6 +66,10 @@ export function createAppMarkup(
               <span>Fit strength</span>
               <output id="surfaceFitStrengthValue">${surfaceFitStrength.toFixed(2)}x</output>
               <input id="surfaceFitStrength" type="range" min="0" max="5" step="0.05" value="${surfaceFitStrength.toFixed(2)}" />
+            </label>
+            <label class="toggle-line">
+              <input id="shadingGeometryAssist" type="checkbox" />
+              <span>光影曲面辅助</span>
             </label>
           </div>
 

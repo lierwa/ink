@@ -54,6 +54,8 @@ const initialTransform: TattooTransform = {
 };
 interface BodySurfaceState {
   texture: Texture;
+  sourceCanvas: HTMLCanvasElement;
+  fileName: string;
   surfaceNormalTexture: Texture | null;
   placementRect: Rect;
   sourceSize: Size;
@@ -79,6 +81,7 @@ interface AppState {
   tattooAsset: TattooAssetState | null;
   transformRevision: number;
   surfaceFitStrength: number;
+  shadingGeometryAssistEnabled: boolean;
   bodySurfaceState: BodySurfaceState;
 }
 
@@ -89,9 +92,12 @@ interface AppElements {
   fabricLayer: HTMLCanvasElement;
   bodyUploadInput: HTMLInputElement;
   tattooUploadInput: HTMLInputElement;
+  editBodyButton: HTMLButtonElement;
+  removeBodyButton: HTMLButtonElement;
   editTattooButton: HTMLButtonElement;
   removeTattooButton: HTMLButtonElement;
   debugMeshInput: HTMLInputElement;
+  shadingGeometryAssistInput: HTMLInputElement;
   opacityInput: HTMLInputElement;
   surfaceFitInput: HTMLInputElement;
   surfaceFitOutput: HTMLOutputElement;
@@ -172,6 +178,8 @@ export async function startApp(): Promise<void> {
     state,
     elements: {
       bodyUploadInput: elements.bodyUploadInput,
+      editBodyButton: elements.editBodyButton,
+      removeBodyButton: elements.removeBodyButton,
       statusLabel: elements.statusLabel,
     },
     pixi,
@@ -180,6 +188,13 @@ export async function startApp(): Promise<void> {
     renderBodySurface: () => {
       scheduleLiveSurfaceRefresh.cancel();
       renderBodySurface(state, pixi);
+    },
+    resetBodySurface: () => {
+      scheduleLiveSurfaceRefresh.cancel();
+      resetBodySurface(state, pixi);
+      renderBodySurface(state, pixi);
+      forceRefreshLocalSurface();
+      renderTattoo(state, pixi);
     },
   });
   installDebugAndResetControls(elements, pixi, fabric, setTransform);
@@ -210,9 +225,12 @@ function getAppElements(): AppElements {
     fabricLayer: getElement<HTMLCanvasElement>("fabricLayer"),
     bodyUploadInput: getElement<HTMLInputElement>("bodyUpload"),
     tattooUploadInput: getElement<HTMLInputElement>("tattooUpload"),
+    editBodyButton: getElement<HTMLButtonElement>("editBody"),
+    removeBodyButton: getElement<HTMLButtonElement>("removeBody"),
     editTattooButton: getElement<HTMLButtonElement>("editTattoo"),
     removeTattooButton: getElement<HTMLButtonElement>("removeTattoo"),
     debugMeshInput: getElement<HTMLInputElement>("debugMesh"),
+    shadingGeometryAssistInput: getElement<HTMLInputElement>("shadingGeometryAssist"),
     opacityInput: getElement<HTMLInputElement>("opacity"),
     surfaceFitInput: getElement<HTMLInputElement>("surfaceFitStrength"),
     surfaceFitOutput: getElement<HTMLOutputElement>("surfaceFitStrengthValue"),
@@ -238,8 +256,11 @@ function initializeAppState(
     tattooAsset: null,
     transformRevision: 0,
     surfaceFitStrength: defaultSurfaceFitStrength,
+    shadingGeometryAssistEnabled: false,
     bodySurfaceState: {
       texture: Texture.from(defaultBodyCanvas),
+      sourceCanvas: defaultBodyCanvas,
+      fileName: "default-placeholder",
       surfaceNormalTexture: createFlatSurfaceNormalTexture(stageSize),
       placementRect: { x: 0, y: 0, width: stageSize.width, height: stageSize.height },
       sourceSize: { width: stageSize.width, height: stageSize.height },
@@ -321,6 +342,10 @@ function installTransformControls(
     pixi.setSurfaceIntensity(strength);
     refreshSurfaceStatus(state, elements);
   });
+  elements.shadingGeometryAssistInput.addEventListener("change", () => {
+    state.shadingGeometryAssistEnabled = elements.shadingGeometryAssistInput.checked;
+    refreshLocalSurface(state, elements, pixi);
+  });
 
   for (const input of [elements.paramX, elements.paramY, elements.paramScale, elements.paramRotation]) {
     input.addEventListener("input", applyPanelTransform);
@@ -354,6 +379,11 @@ function refreshLocalSurface(state: AppState, elements: AppElements, pixi: PixiT
     stageSize,
     placementRect: state.bodySurfaceState.placementRect,
     tattooBounds,
+    shadingAssist: {
+      enabled: state.shadingGeometryAssistEnabled,
+      sourceCanvas: state.bodySurfaceState.sourceCanvas,
+      maxAdjustmentRatio: 0.25,
+    },
   });
 
   const nextSurfaceNormalTexture = localSurface.debug.source === "local-mesh"
@@ -416,7 +446,24 @@ function formatLocalSurfaceStatus(debug: BodySurfaceAnalysisDebugState, fitStren
     return `Surface: insufficient local mesh / warp disabled / fit ${formatSurfaceFitStrength(fitStrength)}`;
   }
 
-  return `Surface: local mesh / warp ${describeWarp(debug.normalStats?.meanNormalXY ?? 0)} / fit ${formatSurfaceFitStrength(fitStrength)}`;
+  const shading = debug.shading?.used
+    ? " / shading used"
+    : debug.shading?.enabled
+      ? ` / shading ${debug.shading.reason}`
+      : " / shading off";
+  return `Surface: local mesh / ${debug.proxy ?? "proxy"} / warp ${describeWarp(debug.normalStats?.meanNormalXY ?? 0)}${shading} / fit ${formatSurfaceFitStrength(fitStrength)}`;
+}
+
+function resetBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
+  const defaultBodyCanvas = createDefaultBodyCanvas();
+  const previousNormalTexture = state.bodySurfaceState.surfaceNormalTexture;
+  if (previousNormalTexture) {
+    // WHY: Remove body 会立即回到默认曲面，先解除旧 normal 绑定可避免销毁后仍被 shader 采样。
+    // TRADE-OFF: 保留 body texture 生命周期给 Pixi 管理，当前只主动处理最容易悬挂引用的 normal texture。
+    pixi.setSurfaceNormalTexture(null);
+    previousNormalTexture.destroy(true);
+  }
+  state.bodySurfaceState = initializeAppState(defaultBodyCanvas).bodySurfaceState;
 }
 
 function describeWarp(meanNormalXY: number): "weak" | "medium" | "strong" {
