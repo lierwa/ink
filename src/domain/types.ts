@@ -164,5 +164,45 @@ export interface BodySurfaceAnalysisDebugState {
   normalStats?: SurfaceFieldData["normalStats"];
   axis?: SurfaceAxis;
   patchBounds?: Rect;
+  proxy?: LocalSurfaceProxy;
+  edgeTurn?: number;
+  curvature?: LocalSurfaceDescriptor["curvature"];
+  shading?: ShadingGeometryAssistDebug;
   warning?: string;
+}
+
+export type LocalSurfaceProxy =
+  | "ellipticalCylinder"
+  | "ellipsoidPatch"
+  | "curvedPlane"
+  | "genericEdgeTurn";
+
+export interface ShadingGeometryAssistDebug {
+  enabled: boolean;
+  used: boolean;
+  confidence: number;
+  agreement: number;
+  appliedStrength: number;
+  reason: "disabled" | "low-confidence" | "geometry-conflict" | "used";
+}
+
+export interface LocalSurfaceDescriptor {
+  source: "geometry" | "geometry-shading" | "insufficient";
+  proxy: LocalSurfaceProxy;
+  axis: SurfaceAxis;
+  localBounds: Rect;
+  localWidth: number;
+  edgeTurn: number;
+  curvature: {
+    acrossAxis: number;
+    alongAxis: number;
+  };
+  confidence: number;
+  shading?: ShadingGeometryAssistDebug;
+}
+
+export interface ShadingGeometryAssistInput {
+  enabled: boolean;
+  sourceCanvas?: HTMLCanvasElement;
+  maxAdjustmentRatio?: number;
 }
