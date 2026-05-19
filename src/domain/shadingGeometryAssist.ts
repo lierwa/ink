@@ -30,7 +30,12 @@ export function resolveShadingGeometryAssist(
     return disabledResult("low-confidence");
   }
 
-  const image = context.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+  let image: ImageData;
+  try {
+    image = context.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+  } catch {
+    return disabledResult("low-confidence");
+  }
   const gradient = estimateLuminanceGradient(image.data, bounds.width, bounds.height);
   const gradientLength = Math.hypot(gradient.x, gradient.y);
   const confidence = clamp(gradientLength / 80, 0, 1);

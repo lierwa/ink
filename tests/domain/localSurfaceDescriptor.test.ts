@@ -1,4 +1,5 @@
-import { describe, expect, test } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, test, vi } from "vitest";
 import { resolveLocalSurfaceDescriptor } from "../../src/domain/localSurfaceDescriptor";
 import type { SkinMask, SkinMeshData } from "../../src/domain/types";
 
@@ -32,4 +33,51 @@ describe("resolveLocalSurfaceDescriptor", () => {
     expect(descriptor.axis.direction.y).toBe(1);
     expect(descriptor.curvature.acrossAxis).toBeGreaterThan(0);
   });
+
+  test("uses aligned shading assist to increase across-axis curvature", () => {
+    const sourceCanvas = createGradientCanvas();
+    const input = {
+      mask: fullMask(),
+      mesh: verticalMesh(),
+      placementRect: { x: 0, y: 0, width: 120, height: 120 },
+      stageSize: { width: 120, height: 120 },
+      tattooBounds: { x: 45, y: 32, width: 30, height: 48 },
+    };
+
+    const geometryOnly = resolveLocalSurfaceDescriptor({
+      ...input,
+      shadingAssist: { enabled: false, sourceCanvas },
+    });
+    const assisted = resolveLocalSurfaceDescriptor({
+      ...input,
+      shadingAssist: { enabled: true, sourceCanvas, maxAdjustmentRatio: 0.25 },
+    });
+
+    expect(assisted.source).toBe("geometry-shading");
+    expect(assisted.shading?.used).toBe(true);
+    expect(assisted.curvature.acrossAxis).toBeGreaterThan(geometryOnly.curvature.acrossAxis);
+  });
 });
+
+function createGradientCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = 120;
+  canvas.height = 120;
+  vi.spyOn(canvas, "getContext").mockReturnValue({
+    getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 4;
+          const value = Math.round((x / Math.max(1, width - 1)) * 255);
+          data[index] = value;
+          data[index + 1] = value;
+          data[index + 2] = value;
+          data[index + 3] = 255;
+        }
+      }
+      return { width, height, data } as ImageData;
+    }),
+  } as unknown as CanvasRenderingContext2D);
+  return canvas;
+}

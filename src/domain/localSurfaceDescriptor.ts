@@ -35,6 +35,8 @@ export function resolveLocalSurfaceDescriptor(input: LocalSurfaceDescriptorInput
   const proxy = aspect >= 1.45 ? "ellipticalCylinder" : "curvedPlane";
   const edgeTurn = estimateEdgeTurn(input.tattooBounds, localBounds);
   const acrossAxis = clamp(0.22 + edgeTurn * 0.42 + (proxy === "ellipticalCylinder" ? 0.12 : 0), 0.08, 0.86);
+  // WHY: 光照明暗变化最能验证横跨局部表面的曲率方向，而不是沿贴图长轴的延展方向。
+  // TRADE-OFF: 只在 cross/normal 轴上加权会放弃斜向高光信息，但能降低纹理方向误判曲率的风险。
   const normalAxis = { x: -axis.direction.y, y: axis.direction.x };
   const shading = resolveShadingGeometryAssist({
     enabled: Boolean(input.shadingAssist?.enabled),
