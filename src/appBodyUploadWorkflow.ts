@@ -58,6 +58,10 @@ export interface BodyUploadWorkflowInput {
 export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void {
   let latestRequestToken = 0;
 
+  const invalidatePendingBodyRequest = (): void => {
+    latestRequestToken += 1;
+  };
+
   const openBodyEditorFromCanvas = async (
     fileName: string,
     sourceCanvas: HTMLCanvasElement,
@@ -85,6 +89,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
         return;
       }
 
+      const previousBodyTexture = input.state.bodySurfaceState.texture;
       const surfaceSummary = applyBodySurfaceResult(input.state, input.pixi, {
         fileName,
         sourceCanvas: modalResult.sourceCanvas,
@@ -101,6 +106,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
       // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
       input.setTransform(centeredTransform, "body-apply");
       input.renderBodySurface();
+      destroyTextureAfterPixiRebind(previousBodyTexture);
       input.elements.statusLabel.textContent = surfaceSummary.status;
     } catch (error) {
       if (!isCurrentRequest()) {
@@ -117,6 +123,10 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
     if (!file) {
       return;
     }
+
+    // WHY: 浏览器 file input 选择同一文件不会触发 change，读取 File 后立即清空可支持 same-file retry。
+    // TRADE-OFF: UI 不再保留文件路径文本，但当前状态标签已经承载上传反馈。
+    input.elements.bodyUploadInput.value = "";
 
     const requestToken = latestRequestToken + 1;
     latestRequestToken = requestToken;
@@ -157,6 +167,9 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
   });
 
   input.elements.removeBodyButton.addEventListener("click", () => {
+    // WHY: Remove 代表用户显式放弃当前 body 编辑流，必须让仍打开的 modal 结果失效。
+    // TRADE-OFF: 用户若误点 Remove，需要重新打开编辑；避免旧异步结果覆盖 placeholder。
+    invalidatePendingBodyRequest();
     input.resetBodySurface();
   });
 }
@@ -223,6 +236,13 @@ function createBodyCenteredTattooTransform(
     rotation: initialTransform.rotation,
     opacity,
   };
+}
+
+function destroyTextureAfterPixiRebind(texture: Texture): void {
+  // WHY: body sprite/mask 在 renderBodySurface 后已绑定新 texture，此时释放旧 texture 才不会留下悬挂采样引用。
+  // TRADE-OFF: 测试替身可能只实现 Texture 的局部形状，因此保留运行时 guard，不把资源清理绑死到 mock 完整性。
+  const maybeDestroyable = texture as Texture & { destroy?: (destroySource?: boolean) => void };
+  maybeDestroyable.destroy?.(true);
 }
 
 async function fileToCanvas(file: File): Promise<HTMLCanvasElement> {

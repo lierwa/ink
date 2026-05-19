@@ -96,6 +96,51 @@ describe("installBodyUploadWorkflow", () => {
     expect(lifecycleCalls.slice(0, 2)).toEqual(["unbind normal", "destroy previous normal"]);
   });
 
+  test("destroys previous body texture after Pixi is rebound to the replacement", async () => {
+    const lifecycleCalls: string[] = [];
+    const state = createBodyWorkflowState();
+    const previousBodyTexture = {
+      source: { id: "old-body" },
+      destroy: vi.fn(() => lifecycleCalls.push("destroy old body")),
+    };
+    state.bodySurfaceState.texture = previousBodyTexture;
+    const bodyUploadInput = document.createElement("input");
+    bodyUploadInput.type = "file";
+    Object.defineProperty(bodyUploadInput, "files", {
+      value: [new File(["body"], "body.png", { type: "image/png" })],
+    });
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(64, 32),
+      },
+    }));
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput,
+        editBodyButton: document.createElement("button"),
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface: vi.fn(() => lifecycleCalls.push("render replacement body")),
+      resetBodySurface: vi.fn(),
+    });
+
+    bodyUploadInput.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => {
+      expect(previousBodyTexture.destroy).toHaveBeenCalledWith(true);
+    });
+    expect(lifecycleCalls).toEqual(["render replacement body", "destroy old body"]);
+  });
+
   test("edit body reopens modal with stored source canvas and params", async () => {
     const state = createBodyWorkflowState();
     const editBodyButton = document.createElement("button");
@@ -143,6 +188,99 @@ describe("installBodyUploadWorkflow", () => {
     removeBodyButton.click();
 
     expect(resetBodySurface).toHaveBeenCalledTimes(1);
+  });
+
+  test("remove invalidates an open edit body modal result", async () => {
+    const state = createBodyWorkflowState();
+    const originalSourceCanvas = state.bodySurfaceState.sourceCanvas;
+    const editedSourceCanvas = document.createElement("canvas");
+    editedSourceCanvas.width = 128;
+    editedSourceCanvas.height = 64;
+    const editBodyButton = document.createElement("button");
+    const removeBodyButton = document.createElement("button");
+    const setTransform = vi.fn();
+    const renderBodySurface = vi.fn();
+    const resetBodySurface = vi.fn();
+    const modal = createDeferred<Awaited<ReturnType<typeof mocks.openBodyUploadModal>>>();
+    mocks.openBodyUploadModal.mockReturnValue(modal.promise);
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        editBodyButton,
+        removeBodyButton,
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform,
+      renderBodySurface,
+      resetBodySurface,
+    });
+
+    editBodyButton.click();
+    await vi.waitFor(() => expect(mocks.openBodyUploadModal).toHaveBeenCalledTimes(1));
+    removeBodyButton.click();
+    modal.resolve({
+      sourceCanvas: editedSourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(128, 64),
+      },
+    });
+    await flushMicrotasks();
+
+    expect(resetBodySurface).toHaveBeenCalledTimes(1);
+    expect(setTransform).not.toHaveBeenCalled();
+    expect(renderBodySurface).not.toHaveBeenCalled();
+    expect(state.bodySurfaceState.sourceCanvas).toBe(originalSourceCanvas);
+    expect(state.bodySurfaceState.revision).toBe(0);
+  });
+
+  test("clears body upload input value after reading the selected file", async () => {
+    const state = createBodyWorkflowState();
+    const bodyUploadInput = document.createElement("input");
+    bodyUploadInput.type = "file";
+    Object.defineProperties(bodyUploadInput, {
+      files: {
+        value: [new File(["body"], "body.png", { type: "image/png" })],
+      },
+      value: {
+        value: "C:\\fakepath\\body.png",
+        writable: true,
+      },
+    });
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(64, 32),
+      },
+    }));
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput,
+        editBodyButton: document.createElement("button"),
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface: vi.fn(),
+      resetBodySurface: vi.fn(),
+    });
+
+    bodyUploadInput.dispatchEvent(new Event("change"));
+
+    expect(bodyUploadInput.value).toBe("");
+    await vi.waitFor(() => expect(mocks.openBodyUploadModal).toHaveBeenCalledTimes(1));
+    expect(bodyUploadInput.value).toBe("");
   });
 });
 
@@ -215,4 +353,19 @@ function installImageStub(): void {
   }
 
   vi.stubGlobal("Image", FakeImage);
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }

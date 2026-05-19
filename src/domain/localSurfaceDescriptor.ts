@@ -38,10 +38,13 @@ export function resolveLocalSurfaceDescriptor(input: LocalSurfaceDescriptorInput
   // WHY: 光照明暗变化最能验证横跨局部表面的曲率方向，而不是沿贴图长轴的延展方向。
   // TRADE-OFF: 只在 cross/normal 轴上加权会放弃斜向高光信息，但能降低纹理方向误判曲率的风险。
   const normalAxis = { x: -axis.direction.y, y: axis.direction.x };
+  const shadingLocalBounds = input.shadingAssist?.sourceCanvas
+    ? mapStageBoundsToSourceCanvas(localBounds, input.placementRect, input.shadingAssist.sourceCanvas)
+    : localBounds;
   const shading = resolveShadingGeometryAssist({
     enabled: Boolean(input.shadingAssist?.enabled),
     sourceCanvas: input.shadingAssist?.sourceCanvas,
-    localBounds,
+    localBounds: shadingLocalBounds,
     crossAxis: normalAxis,
     maxAdjustmentRatio: input.shadingAssist?.maxAdjustmentRatio,
   });
@@ -127,6 +130,21 @@ function estimateEdgeTurn(tattooBounds: Rect, localBounds: Rect): number {
   const edgeDistance = Math.max(0, Math.min(left, right, top, bottom));
   const radius = Math.max(1, Math.min(localBounds.width, localBounds.height) * 0.5);
   return 1 - clamp(edgeDistance / radius, 0, 1);
+}
+
+function mapStageBoundsToSourceCanvas(
+  localBounds: Rect,
+  placementRect: Rect,
+  sourceCanvas: HTMLCanvasElement,
+): Rect {
+  // WHY: mesh/localBounds 已经被映射到 stage placement 坐标，而 canvas readback 只能使用原图像素坐标。
+  // TRADE-OFF: 这里只做线性反映射，越界与取整继续交给 shadingGeometryAssist 统一 clamp，避免重复边界策略。
+  return {
+    x: ((localBounds.x - placementRect.x) / placementRect.width) * sourceCanvas.width,
+    y: ((localBounds.y - placementRect.y) / placementRect.height) * sourceCanvas.height,
+    width: (localBounds.width / placementRect.width) * sourceCanvas.width,
+    height: (localBounds.height / placementRect.height) * sourceCanvas.height,
+  };
 }
 
 function pointInsideRect(point: Point, rect: Rect): boolean {

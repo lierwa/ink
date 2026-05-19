@@ -57,6 +57,37 @@ describe("resolveLocalSurfaceDescriptor", () => {
     expect(assisted.shading?.used).toBe(true);
     expect(assisted.curvature.acrossAxis).toBeGreaterThan(geometryOnly.curvature.acrossAxis);
   });
+
+  test("maps stage-space local bounds into source canvas bounds for shading assist", () => {
+    const getImageData = vi.fn((_x: number, _y: number, width: number, height: number) => ({
+      width,
+      height,
+      data: new Uint8ClampedArray(width * height * 4).fill(255),
+    }) as ImageData);
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = 120;
+    sourceCanvas.height = 60;
+    mockCanvas2DContext(sourceCanvas, { getImageData });
+
+    resolveLocalSurfaceDescriptor({
+      mask: fullMask(240, 120),
+      mesh: {
+        positions: new Float32Array([
+          140, 70,
+          188, 70,
+          140, 118,
+          188, 118,
+        ]),
+        indices: new Uint32Array([0, 1, 2, 1, 3, 2]),
+      },
+      placementRect: { x: 100, y: 50, width: 240, height: 120 },
+      stageSize: { width: 900, height: 620 },
+      tattooBounds: { x: 150, y: 80, width: 30, height: 30 },
+      shadingAssist: { enabled: true, sourceCanvas },
+    });
+
+    expect(getImageData).toHaveBeenCalledWith(20, 10, 24, 24);
+  });
 });
 
 function createGradientCanvas(): HTMLCanvasElement {
