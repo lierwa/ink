@@ -1,7 +1,9 @@
+import { resolveLocalSurfaceDescriptor } from "./localSurfaceDescriptor";
 import type {
   BodySurfaceAnalysisDebugState,
   Point,
   Rect,
+  ShadingGeometryAssistInput,
   Size,
   SkinMask,
   SkinMeshData,
@@ -15,6 +17,7 @@ export interface LocalMeshSurfaceInput {
   stageSize: Size;
   placementRect: Rect;
   tattooBounds: Rect;
+  shadingAssist?: ShadingGeometryAssistInput;
 }
 
 export interface LocalMeshSurfaceResult {
@@ -23,56 +26,57 @@ export interface LocalMeshSurfaceResult {
 }
 
 export function buildLocalMeshSurface(input: LocalMeshSurfaceInput): LocalMeshSurfaceResult {
-  const padding = Math.max(input.tattooBounds.width, input.tattooBounds.height) * 0.75;
-  const searchBounds = expandRect(input.tattooBounds, padding);
-  const vertices = collectVerticesInRect(input.mesh, searchBounds);
+  const descriptor = resolveLocalSurfaceDescriptor({
+    mask: input.mask,
+    mesh: input.mesh,
+    placementRect: input.placementRect,
+    stageSize: input.stageSize,
+    tattooBounds: input.tattooBounds,
+    shadingAssist: input.shadingAssist,
+  });
 
-  if (vertices.length < 3) {
+  if (descriptor.source === "insufficient") {
     const surfaceField = createFlatSurface(input.stageSize);
     return {
       surfaceField,
       debug: {
         source: "insufficient-mesh",
         confidence: 0,
-        patchBounds: searchBounds,
+        patchBounds: descriptor.localBounds,
+        proxy: descriptor.proxy,
+        edgeTurn: descriptor.edgeTurn,
+        curvature: descriptor.curvature,
+        shading: descriptor.shading,
         normalStats: surfaceField.normalStats,
         warning: "insufficient local mesh",
       },
     };
   }
 
-  const localBounds = boundsOfPoints(vertices);
-  const axis = createLocalAxis(localBounds);
   const surfaceField = buildNormalField({
     mask: input.mask,
     stageSize: input.stageSize,
     placementRect: input.placementRect,
     tattooBounds: input.tattooBounds,
-    localBounds,
-    axis,
+    localBounds: descriptor.localBounds,
+    axis: descriptor.axis,
+    acrossAxisCurvature: descriptor.curvature.acrossAxis,
   });
 
   return {
     surfaceField,
     debug: {
       source: "local-mesh",
-      confidence: surfaceField.normalStats?.meanNormalXY ?? 0,
-      axis,
-      patchBounds: localBounds,
+      confidence: descriptor.confidence,
+      axis: descriptor.axis,
+      patchBounds: descriptor.localBounds,
+      proxy: descriptor.proxy,
+      edgeTurn: descriptor.edgeTurn,
+      curvature: descriptor.curvature,
+      shading: descriptor.shading,
       normalStats: surfaceField.normalStats,
     },
   };
-}
-
-function collectVerticesInRect(mesh: SkinMeshData, rect: Rect): Point[] {
-  const points: Point[] = [];
-  for (let index = 0; index < mesh.positions.length; index += 2) {
-    const point = { x: mesh.positions[index], y: mesh.positions[index + 1] };
-    if (pointInsideRect(point, rect)) {
-      points.push(point);
-    }
-  }
-  return points;
 }
 
 function buildNormalField(input: {
@@ -82,6 +86,7 @@ function buildNormalField(input: {
   tattooBounds: Rect;
   localBounds: Rect;
   axis: SurfaceAxis;
+  acrossAxisCurvature: number;
 }): SurfaceFieldData {
   const width = Math.max(1, Math.round(input.stageSize.width));
   const height = Math.max(1, Math.round(input.stageSize.height));
@@ -110,7 +115,7 @@ function buildNormalField(input: {
       const edgeRatio = distanceToRectEdgeRatio({ x, y }, input.localBounds);
       // WHY: 局部 mesh 只是 2D mask 代理，过强 normal 会被 shader 放大成横向撕裂。
       // TRADE-OFF: 限制 XY 强度会弱化 2.5D 起伏，但优先保证 tattoo 图案结构不变形。
-      const strength = clamp(0.31 + (1 - edgeRatio) * 0.3, 0.2, safeNormalXYLimit);
+      const strength = clamp(input.acrossAxisCurvature + (1 - edgeRatio) * 0.16, 0.12, safeNormalXYLimit);
       const nx = normalAxis.x * cross * strength;
       const ny = normalAxis.y * cross * strength;
       const nz = Math.sqrt(Math.max(0.2, 1 - nx * nx - ny * ny));
@@ -132,32 +137,6 @@ function buildNormalField(input: {
       maxNormalXY,
       meanNormalXY: active > 0 ? sumNormalXY / active : 0,
     },
-  };
-}
-
-function expandRect(rect: Rect, padding: number): Rect {
-  return {
-    x: rect.x - padding,
-    y: rect.y - padding,
-    width: rect.width + padding * 2,
-    height: rect.height + padding * 2,
-  };
-}
-
-function boundsOfPoints(points: Point[]): Rect {
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
-  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
-}
-
-function createLocalAxis(bounds: Rect): SurfaceAxis {
-  const isVertical = bounds.height >= bounds.width;
-  return {
-    origin: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
-    direction: isVertical ? { x: 0, y: 1 } : { x: 1, y: 0 },
-    length: isVertical ? bounds.height : bounds.width,
   };
 }
 
