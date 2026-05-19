@@ -288,6 +288,7 @@ describe("installBodyUploadWorkflow", () => {
   test("clears body upload input value after reading the selected file", async () => {
     const state = createBodyWorkflowState();
     const bodyUploadInput = document.createElement("input");
+    const bodyUploadStatus = document.createElement("div");
     bodyUploadInput.type = "file";
     Object.defineProperties(bodyUploadInput, {
       files: {
@@ -311,6 +312,7 @@ describe("installBodyUploadWorkflow", () => {
       state: state as never,
       elements: {
         bodyUploadInput,
+        bodyUploadStatus,
         editBodyButton: document.createElement("button"),
         removeBodyButton: document.createElement("button"),
         statusLabel: document.createElement("div"),
@@ -327,6 +329,44 @@ describe("installBodyUploadWorkflow", () => {
     expect(bodyUploadInput.value).toBe("");
     await vi.waitFor(() => expect(mocks.openBodyUploadModal).toHaveBeenCalledTimes(1));
     expect(bodyUploadInput.value).toBe("");
+    expect(bodyUploadStatus.textContent).toBe("Current: body.png");
+  });
+
+  test("edit body keeps current file label and remove body resets it", async () => {
+    const state = createBodyWorkflowState();
+    const editBodyButton = document.createElement("button");
+    const removeBodyButton = document.createElement("button");
+    const bodyUploadStatus = document.createElement("div");
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(64, 32),
+      },
+    }));
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        bodyUploadStatus,
+        editBodyButton,
+        removeBodyButton,
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface: vi.fn(),
+      resetBodySurface: vi.fn(),
+    });
+
+    editBodyButton.click();
+    await vi.waitFor(() => expect(bodyUploadStatus.textContent).toBe("Current: body.png"));
+
+    removeBodyButton.click();
+    expect(bodyUploadStatus.textContent).toBe("No body uploaded");
   });
 });
 

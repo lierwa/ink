@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   applyTattooState,
   clearTattooState,
@@ -8,6 +8,10 @@ import {
   resolveProjectionMesh,
   resolveSurfaceWarpEnabled,
   applySurfaceNormalTextureState,
+  applyTattooSpriteState,
+  clearTattooSpriteState,
+  applyTattooMeshVisibilityState,
+  createSkinMaskAlphaPixels,
   createTattooShaderResources,
   createSkinWireframeSegments,
   createBodyAnalysisDebugSegments,
@@ -17,6 +21,7 @@ import {
   tattooProjectionFragmentHeader,
   tattooProjectionFragmentMain,
 } from "../../src/render/pixiRenderer";
+import { activeDebugMeshStrokeStyle, drawActiveDebugMesh, syncDebugMeshWireframe } from "../../src/render/pixiDebugGeometry";
 import type { SkinMeshData } from "../../src/domain/types";
 import { Texture } from "pixi.js";
 import { buildSphereMesh } from "../../src/domain/sphereMesh";
@@ -41,26 +46,26 @@ describe("createTattooShaderResources", () => {
     expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0.84);
     expect(resources.tattooUniforms.uniforms.uSurfaceEnabled).toBe(0);
     expect(resources.tattooUniforms.uniforms.uSurfaceDepth).toBe(0.68);
-    expect(resources.tattooUniforms.uniforms.uSurfaceIntensity).toBe(1.4);
+    expect("uSurfaceIntensity" in resources.tattooUniforms.uniforms).toBe(false);
     expect(resources.tattooUniforms.uniforms.uMaxWarpPx).toBe(56);
     expect(resources.tattooUniforms.isUniformGroup).toBe(true);
   });
+});
 
-  test("allows debug fit strength up to 5x while clamping unsafe values", () => {
-    const resources = createTattooShaderResources({
-      tattooSize: { width: 100, height: 80 },
-      transform: {
-        x: 450,
-        y: 310,
-        scale: 1,
-        rotation: 0,
-        opacity: 0.84,
-      },
-      surfaceDepth: 0.68,
-      surfaceIntensity: 7,
+describe("skin mask clipping texture", () => {
+  test("encodes skin probabilities into alpha while keeping mask color opaque", () => {
+    const pixels = createSkinMaskAlphaPixels({
+      width: 2,
+      height: 2,
+      probabilities: new Float32Array([0, 0.25, 0.5, 1]),
     });
 
-    expect(resources.tattooUniforms.uniforms.uSurfaceIntensity).toBe(5);
+    expect(Array.from(pixels)).toEqual([
+      255, 255, 255, 0,
+      255, 255, 255, 64,
+      255, 255, 255, 128,
+      255, 255, 255, 255,
+    ]);
   });
 });
 
@@ -167,18 +172,112 @@ describe("tattoo shader state binding", () => {
   });
 });
 
+describe("tattoo sprite visibility fallback", () => {
+  test("setTattoo path makes the shader mesh visible from tattoo opacity", () => {
+    const mesh = { visible: false };
+
+    applyTattooMeshVisibilityState(mesh, 0.67);
+    expect(mesh.visible).toBe(true);
+
+    applyTattooMeshVisibilityState(mesh, 0);
+    expect(mesh.visible).toBe(false);
+  });
+
+  test("setTattoo path also updates a plain visible Pixi sprite", () => {
+    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
+    const texture = { source } as unknown as Texture;
+    const sprite = {
+      texture: Texture.EMPTY,
+      anchor: { set: vi.fn() },
+      scale: { set: vi.fn() },
+      x: 0,
+      y: 0,
+      rotation: 0,
+      alpha: 0,
+      visible: false,
+    };
+
+    applyTattooSpriteState(sprite as never, {
+      texture,
+      tattooSize: { width: 220, height: 180 },
+      transform: {
+        x: 402,
+        y: 198,
+        scale: 0.52,
+        rotation: 0.27,
+        opacity: 0.67,
+      },
+    });
+
+    expect(sprite.texture).toBe(texture);
+    expect(sprite.anchor.set).toHaveBeenCalledWith(0.5);
+    expect(sprite.scale.set).toHaveBeenCalledWith(0.52);
+    expect(sprite.x).toBe(402);
+    expect(sprite.y).toBe(198);
+    expect(sprite.rotation).toBe(0.27);
+    expect(sprite.alpha).toBe(0.67);
+    expect(sprite.visible).toBe(true);
+  });
+
+  test("plain sprite fallback is hidden while surface warp is active so it cannot cover the shader mesh", () => {
+    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
+    const texture = { source } as unknown as Texture;
+    const sprite = {
+      texture: Texture.EMPTY,
+      anchor: { set: vi.fn() },
+      scale: { set: vi.fn() },
+      x: 0,
+      y: 0,
+      rotation: 0,
+      alpha: 0,
+      visible: true,
+    };
+
+    applyTattooSpriteState(sprite as never, {
+      texture,
+      tattooSize: { width: 220, height: 180 },
+      transform: {
+        x: 402,
+        y: 198,
+        scale: 0.52,
+        rotation: 0.27,
+        opacity: 0.67,
+      },
+    }, { surfaceWarpEnabled: true });
+
+    expect(sprite.visible).toBe(false);
+  });
+
+  test("clearTattoo path hides the plain sprite fallback", () => {
+    const sprite = {
+      texture: Texture.WHITE,
+      alpha: 1,
+      visible: true,
+    };
+
+    clearTattooSpriteState(sprite as never);
+
+    expect(sprite.texture).toBe(Texture.EMPTY);
+    expect(sprite.alpha).toBe(0);
+    expect(sprite.visible).toBe(false);
+  });
+});
+
 describe("tattoo projection shader", () => {
   test("samples tattoo through bounded normal offset and clamps warp distance", () => {
     expect(tattooProjectionFragmentMain).toContain("vec2 localPoint = (vSurfacePoint - uTattooTransform.xy) / safeScale");
     expect(tattooProjectionFragmentMain).toContain("vec4 encodedNormal = texture(uSurfaceNormalTex, vSurfaceUv)");
     expect(tattooProjectionFragmentMain).toContain("if (encodedNormal.a > 0.0)");
-    expect(tattooProjectionFragmentMain).toContain("float surfaceIntensity = clamp(uSurfaceIntensity, 0.0, 5.0)");
+    expect(tattooProjectionFragmentMain).not.toContain("uSurfaceIntensity");
+    expect(tattooProjectionFragmentMain).toContain("float fitStrength = clamp(uSurfaceDepth * 0.72, 0.0, 1.0)");
+    expect(tattooProjectionFragmentMain).toContain("float surfaceLight = 1.0");
+    expect(tattooProjectionFragmentMain).toContain("surfaceLight = clamp(dot(surfaceNormal, normalize(vec3(-0.35, -0.25, 0.9))) * 0.38 + 0.72, 0.72, 1.12)");
     expect(tattooProjectionFragmentMain).toContain("vec2 warpOffsetPx = surfaceNormal.xy * warpScalePx");
     expect(tattooProjectionFragmentMain).toContain("float appliedWarpLimit = min(64.0, uMaxWarpPx)");
     expect(tattooProjectionFragmentMain).toContain("if (warpLength > appliedWarpLimit)");
     expect(tattooProjectionFragmentMain).toContain("warpedPoint = localPoint + warpOffsetPx");
     expect(tattooProjectionFragmentMain).toContain("vec4 tattooColor = texture(uTexture, tattooUv)");
-    expect(tattooProjectionFragmentMain).toContain("vec4(tattooColor.rgb, tattooColor.a * uTattooOpacity)");
+    expect(tattooProjectionFragmentMain).toContain("vec4(tattooColor.rgb * surfaceLight, tattooColor.a * uTattooOpacity)");
     expect(tattooProjectionFragmentMain).not.toContain("1.0 / forward");
     expect(tattooProjectionFragmentMain).not.toContain("surfaceNormal.xy * normalizedPoint");
     expect(tattooProjectionFragmentMain).not.toContain("vec2 radial = vec2(localPoint.x * abs(localPoint.x), localPoint.y * abs(localPoint.y))");
@@ -189,7 +288,7 @@ describe("tattoo projection shader", () => {
     expect(tattooProjectionFragmentHeader).toContain("in vec2 vSurfaceUv;");
     expect(tattooProjectionFragmentHeader).not.toContain("uniform vec3 uSphere;");
     expect(tattooProjectionFragmentHeader).toContain("uniform sampler2D uSurfaceNormalTex;");
-    expect(tattooProjectionFragmentHeader).toContain("uniform float uSurfaceIntensity;");
+    expect(tattooProjectionFragmentHeader).not.toContain("uSurfaceIntensity");
     expect(tattooProjectionFragmentHeader).toContain("uniform float uMaxWarpPx;");
   });
 });
@@ -233,6 +332,63 @@ describe("createSkinWireframeSegments", () => {
 
     const segments = createSkinWireframeSegments(mesh);
     expect(segments.length).toBe(12);
+  });
+
+  test("draws body mesh wireframe with the same subtle orange style as body editor", () => {
+    const graphics = {
+      clear: () => undefined,
+      moveTo: () => undefined,
+      lineTo: () => undefined,
+      stroke: (style: unknown) => {
+        strokes.push(style);
+      },
+    };
+    const strokes: unknown[] = [];
+    const mesh: SkinMeshData = {
+      positions: new Float32Array([
+        0, 0,
+        1, 0,
+        0, 1,
+      ]),
+      indices: new Uint32Array([0, 1, 2]),
+    };
+
+    drawActiveDebugMesh(graphics as never, mesh);
+
+    expect(createSkinWireframeSegments(mesh).length).toBeGreaterThan(0);
+    expect(strokes).toEqual([activeDebugMeshStrokeStyle]);
+    expect(activeDebugMeshStrokeStyle).toEqual({ color: 0xd04f24, width: 1, alpha: 0.74 });
+  });
+
+  test("syncs debug mesh visibility by redrawing the current body mesh", () => {
+    const strokes: unknown[] = [];
+    const moves: Array<[number, number]> = [];
+    const graphics = {
+      visible: false,
+      clear: vi.fn(),
+      moveTo: (x: number, y: number) => moves.push([x, y]),
+      lineTo: vi.fn(),
+      stroke: (style: unknown) => strokes.push(style),
+    };
+    const mesh: SkinMeshData = {
+      positions: new Float32Array([
+        4, 5,
+        14, 5,
+        4, 15,
+      ]),
+      indices: new Uint32Array([0, 1, 2]),
+    };
+
+    syncDebugMeshWireframe(graphics as never, true, mesh);
+
+    expect(graphics.visible).toBe(true);
+    expect(graphics.clear).toHaveBeenCalled();
+    expect(moves[0]).toEqual([4, 5]);
+    expect(strokes).toEqual([activeDebugMeshStrokeStyle]);
+
+    syncDebugMeshWireframe(graphics as never, false, mesh);
+
+    expect(graphics.visible).toBe(false);
   });
 });
 

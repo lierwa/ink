@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi } from "vitest";
-import { createAppMarkup, defaultSurfaceFitStrength } from "../src/appMarkup";
+import { createAppMarkup } from "../src/appMarkup";
 import {
   computeContainPlacementRect,
   createBodyMeshPreviewBuilder,
@@ -21,12 +21,17 @@ describe("createAppMarkup", () => {
       scale: 0.42,
       rotation: 0,
       opacity: 1,
-    }, defaultSurfaceFitStrength);
+    });
 
     expect(host.querySelector("#editBody")).toBeInstanceOf(HTMLButtonElement);
     expect(host.querySelector("#removeBody")).toBeInstanceOf(HTMLButtonElement);
     expect(host.querySelector("#shadingGeometryAssist")).toBeInstanceOf(HTMLInputElement);
+    expect(host.querySelector("#bodyUploadStatus")?.textContent).toBe("No body uploaded");
+    expect(host.querySelector("#tattooUploadStatus")?.textContent).toBe("No tattoo uploaded");
     expect(host.textContent).toContain("光影曲面辅助");
+    expect(host.querySelector("#surfaceFitStrength")).toBeNull();
+    expect(host.querySelector("#surfaceFitStrengthValue")).toBeNull();
+    expect(host.textContent).not.toContain("Fit strength");
   });
 });
 

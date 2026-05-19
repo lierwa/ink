@@ -54,7 +54,3 @@ export function replaceTextureBindingBeforeDestroy(
     previousTexture.destroy?.(true);
   }
 }
-
-export function formatSurfaceFitStrength(strength: number): string {
-  return `${strength.toFixed(2)}x`;
-}

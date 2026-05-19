@@ -31,6 +31,7 @@ export interface UploadWorkflowState {
 
 export interface UploadWorkflowElements {
   tattooUploadInput: HTMLInputElement;
+  tattooUploadStatus?: HTMLElement;
   statusLabel: HTMLElement;
   editTattooButton: HTMLButtonElement;
   removeTattooButton: HTMLButtonElement;
@@ -217,6 +218,7 @@ async function updateTattooFromSource(
       return;
     }
 
+    setUploadStatus(input.elements.tattooUploadStatus, `Current: ${fileName}`);
     input.elements.statusLabel.textContent = confirmed.fallbackFrom
       ? `applied tattoo (${confirmed.fallbackFrom} -> ${confirmed.mode} fallback)`
       : `applied tattoo (${confirmed.mode})`;
@@ -246,6 +248,7 @@ function clearCurrentTattoo(
   input.state.tattooAsset = null;
   input.state.tattooTransform = { ...input.initialTransform };
   input.elements.statusLabel.textContent = "Upload tattoo to enable transform controls";
+  setUploadStatus(input.elements.tattooUploadStatus, "No tattoo uploaded");
   input.syncPanelFromTransform();
   input.renderTattoo();
 }
@@ -260,8 +263,8 @@ function createProcessedOptionsFromCanvas(normalizedCanvas: HTMLCanvasElement): 
 }
 
 function getInitialUploadMode(options: ProcessedTattooOption[]): UploadProcessingMode {
-  // WHY: 产品侧要求默认展示 line-art，用户可在 modal 左上角与 original 对比后再 Apply。
-  // TRADE-OFF: line-art 在极端输入上可能接近透明，因此由 Apply 阶段自动回退兜底可见性。
+  // WHY: tattoo 上传的主流程是先获得干净线稿，默认 Line-Art 能直接进入抠图确认。
+  // TRADE-OFF: 弱对比图可能被清成近透明，因此 Apply 阶段保留 original fallback 兜底。
   const preferred = options.find((option) => option.mode === "line-art" && !option.error);
   if (preferred) {
     return preferred.mode;
@@ -348,4 +351,10 @@ function requiredContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
+}
+
+function setUploadStatus(element: HTMLElement | undefined, text: string): void {
+  if (element) {
+    element.textContent = text;
+  }
 }

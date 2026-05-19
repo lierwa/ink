@@ -34,6 +34,7 @@ interface BodyUploadState {
 
 interface BodyUploadElements {
   bodyUploadInput: HTMLInputElement;
+  bodyUploadStatus?: HTMLElement;
   editBodyButton: HTMLButtonElement;
   removeBodyButton: HTMLButtonElement;
   statusLabel: HTMLDivElement;
@@ -111,6 +112,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
       if (previousBodyTexture !== input.state.bodySurfaceState.texture) {
         destroyTextureAfterPixiRebind(previousBodyTexture);
       }
+      setUploadStatus(input.elements.bodyUploadStatus, `Current: ${fileName}`);
       input.elements.statusLabel.textContent = surfaceSummary.status;
     } catch (error) {
       if (!isCurrentRequest()) {
@@ -175,6 +177,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
     // TRADE-OFF: 用户若误点 Remove，需要重新打开编辑；避免旧异步结果覆盖 placeholder。
     invalidatePendingBodyRequest();
     input.resetBodySurface();
+    setUploadStatus(input.elements.bodyUploadStatus, "No body uploaded");
   });
 }
 
@@ -285,4 +288,10 @@ function fileToImage(file: File): Promise<HTMLImageElement> {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
+}
+
+function setUploadStatus(element: HTMLElement | undefined, text: string): void {
+  if (element) {
+    element.textContent = text;
+  }
 }

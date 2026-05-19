@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { cropCanvasToCanvas, normalizeCropRect } from "../../src/image/cropCanvas";
+import { cropCanvasToCanvas, cropCanvasToPaddedCanvas, normalizeCropRect } from "../../src/image/cropCanvas";
 
 describe("normalizeCropRect", () => {
   test("clamps crop rectangle to source bounds and rounds to pixels", () => {
@@ -52,6 +52,19 @@ describe("cropCanvasToCanvas", () => {
 
     expect(() => cropCanvasToCanvas(source, { x: 3, y: 4, width: 8, height: 6 }, () => output))
       .toThrow("Could not create a 2D canvas context.");
+  });
+});
+
+describe("cropCanvasToPaddedCanvas", () => {
+  test("adds transparent projection padding around the selected crop", () => {
+    const source = createCanvasStub(40, 30);
+    const output = createCanvasStub();
+    const result = cropCanvasToPaddedCanvas(source, { x: 5, y: 6, width: 20, height: 10 }, 4, () => output);
+
+    expect(result.width).toBe(28);
+    expect(result.height).toBe(18);
+    expect(output.context.clearRect).toHaveBeenCalledWith(0, 0, 28, 18);
+    expect(output.context.drawImage).toHaveBeenCalledWith(source, 5, 6, 20, 10, 4, 4, 20, 10);
   });
 });
 

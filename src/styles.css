@@ -198,6 +198,13 @@ h1 {
   font-size: 0.78rem;
 }
 
+.upload-status {
+  margin-top: -4px;
+  color: #c7d0ce;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .toggle-line {
   display: flex !important;
   grid-template-columns: none !important;

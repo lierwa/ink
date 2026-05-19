@@ -69,6 +69,23 @@ describe("openUploadConfirmModal", () => {
     expect(document.querySelector("[data-upload-confirm-modal]")).toBeNull();
   });
 
+  test("Apply uses projection-safe transparent padding for the default tattoo export", async () => {
+    const source = createCanvasStub(20, 18);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "original",
+      options: [createOption("original", source)],
+    });
+
+    getButton("Apply").click();
+
+    await expect(promise).resolves.toMatchObject({
+      mode: "original",
+      cropRect: { x: 0, y: 0, width: 20, height: 18 },
+      canvas: expect.objectContaining({ width: 36, height: 34 }),
+    });
+  });
+
   test("renders mode buttons and marks the initial line-art mode as active", async () => {
     const source = createCanvasStub(20, 18);
     const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
@@ -177,6 +194,98 @@ describe("openUploadConfirmModal", () => {
 
     await promise;
     expect(cropCanvas).toHaveBeenCalledWith(source, { x: 25, y: 10, width: 75, height: 70 });
+  });
+
+  test("initial crop selection uses the full uploaded canvas by default", async () => {
+    const source = createAlphaRectCanvas(12, 10, { x: 3, y: 2, width: 5, height: 4 });
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      options: [createOption("line-art", source)],
+      cropCanvas,
+    });
+
+    expect(getCropperSelection()).toMatchObject({ x: 0, y: 0, width: 12, height: 10 });
+    getButton("Apply").click();
+
+    await expect(promise).resolves.toMatchObject({
+      cropRect: { x: 0, y: 0, width: 12, height: 10 },
+    });
+  });
+
+  test("initial crop selection keeps opaque white paper inside the default full-canvas crop", async () => {
+    const source = createOpaquePaperInkCanvas(14, 12, { x: 4, y: 3, width: 6, height: 5 });
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      options: [createOption("line-art", source)],
+      cropCanvas,
+    });
+
+    expect(getCropperSelection()).toMatchObject({ x: 0, y: 0, width: 14, height: 12 });
+    getButton("Apply").click();
+
+    await promise;
+  });
+
+  test("initial crop selection keeps sparse edge pixels inside the default full-canvas crop", async () => {
+    const source = createNoisyPaperInkCanvas(
+      24,
+      18,
+      { x: 7, y: 5, width: 9, height: 8 },
+      [
+        { x: 1, y: 2 },
+        { x: 22, y: 16 },
+        { x: 3, y: 15 },
+      ],
+    );
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      options: [createOption("line-art", source)],
+      cropCanvas,
+    });
+
+    expect(getCropperSelection()).toMatchObject({ x: 0, y: 0, width: 24, height: 18 });
+    getButton("Apply").click();
+
+    await promise;
+  });
+
+  test("initial crop selection falls back to full canvas when alpha content is empty", async () => {
+    const source = createAlphaRectCanvas(12, 10, null);
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      options: [createOption("line-art", source)],
+      cropCanvas,
+    });
+
+    expect(getCropperSelection()).toMatchObject({ x: 0, y: 0, width: 12, height: 10 });
+    getButton("Apply").click();
+
+    await promise;
+  });
+
+  test("initial crop rect takes precedence over detected alpha content", async () => {
+    const source = createAlphaRectCanvas(20, 16, { x: 3, y: 2, width: 5, height: 4 });
+    const cropCanvas = vi.fn((canvas: HTMLCanvasElement) => canvas);
+    const promise = openUploadConfirmModal({
+      fileName: "tattoo.png",
+      initialMode: "line-art",
+      initialCropRect: { x: 8, y: 6, width: 7, height: 5 },
+      options: [createOption("line-art", source)],
+      cropCanvas,
+    });
+
+    expect(getCropperSelection()).toMatchObject({ x: 8, y: 6, width: 7, height: 5 });
+    getButton("Apply").click();
+
+    await promise;
   });
 
   test("converts a scaled and centered Cropper selection back to source pixels", () => {
@@ -325,8 +434,12 @@ function getRequiredElement<T extends Element>(selector: string): T {
   return element as T;
 }
 
+function getCropperSelection(): HTMLElement & { x?: number; y?: number; width?: number; height?: number } {
+  return getRequiredElement<HTMLElement & { x?: number; y?: number; width?: number; height?: number }>("cropper-selection");
+}
+
 function setCropperSelection(crop: { x: number; y: number; width: number; height: number }): void {
-  const selection = getRequiredElement<HTMLElement & { x?: number; y?: number; width?: number; height?: number }>("cropper-selection");
+  const selection = getCropperSelection();
 
   selection.x = crop.x;
   selection.y = crop.y;
@@ -357,6 +470,106 @@ function createAlphaCoverageCanvas(
 
       return {
         getImageData: vi.fn(() => ({ data: alpha })),
+      };
+    }),
+  });
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function createAlphaRectCanvas(
+  width: number,
+  height: number,
+  rect: { x: number; y: number; width: number; height: number } | null,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const pixels = new Uint8ClampedArray(width * height * 4);
+
+  if (rect) {
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        const offset = (y * width + x) * 4;
+        pixels[offset] = 96;
+        pixels[offset + 1] = 96;
+        pixels[offset + 2] = 96;
+        pixels[offset + 3] = 255;
+      }
+    }
+  }
+
+  Object.defineProperty(canvas, "getContext", {
+    configurable: true,
+    value: vi.fn((contextId: string) => {
+      if (contextId !== "2d") {
+        return null;
+      }
+
+      return {
+        clearRect: vi.fn(),
+        drawImage: vi.fn(),
+        getImageData: vi.fn(() => ({ data: pixels })),
+      };
+    }),
+  });
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function createOpaquePaperInkCanvas(
+  width: number,
+  height: number,
+  rect: { x: number; y: number; width: number; height: number },
+): HTMLCanvasElement {
+  return createNoisyPaperInkCanvas(width, height, rect, []);
+}
+
+function createNoisyPaperInkCanvas(
+  width: number,
+  height: number,
+  rect: { x: number; y: number; width: number; height: number },
+  noise: Array<{ x: number; y: number }>,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const pixels = new Uint8ClampedArray(width * height * 4);
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    pixels[i] = 255;
+    pixels[i + 1] = 255;
+    pixels[i + 2] = 255;
+    pixels[i + 3] = 255;
+  }
+
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      const offset = (y * width + x) * 4;
+      pixels[offset] = 116;
+      pixels[offset + 1] = 116;
+      pixels[offset + 2] = 116;
+      pixels[offset + 3] = 255;
+    }
+  }
+
+  for (const point of noise) {
+    const offset = (point.y * width + point.x) * 4;
+    pixels[offset] = 88;
+    pixels[offset + 1] = 88;
+    pixels[offset + 2] = 88;
+    pixels[offset + 3] = 255;
+  }
+
+  Object.defineProperty(canvas, "getContext", {
+    configurable: true,
+    value: vi.fn((contextId: string) => {
+      if (contextId !== "2d") {
+        return null;
+      }
+
+      return {
+        clearRect: vi.fn(),
+        drawImage: vi.fn(),
+        getImageData: vi.fn(() => ({ data: pixels })),
       };
     }),
   });

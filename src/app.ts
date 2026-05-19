@@ -7,7 +7,7 @@ import {
   type BodySurfaceRenderState,
   type PixiTattooRenderer,
 } from "./render/pixiRenderer";
-import { createAppMarkup, createCanvasMarkup, defaultSurfaceFitStrength } from "./appMarkup";
+import { createAppMarkup, createCanvasMarkup } from "./appMarkup";
 import { isSameTattooTransform } from "./appUploadQueue";
 import { installUploadWorkflow } from "./appUploadWorkflow";
 import { installBodyUploadWorkflow } from "./appBodyUploadWorkflow";
@@ -15,7 +15,6 @@ import type { CropRect } from "./image/cropCanvas";
 import type { UploadProcessingMode } from "./editor/uploadConfirmModal";
 import {
   createLiveSurfaceRefreshScheduler,
-  formatSurfaceFitStrength,
   replaceTextureBindingBeforeDestroy,
   type LiveSurfaceRefreshScheduler,
 } from "./appSurfaceRuntime";
@@ -80,7 +79,6 @@ interface AppState {
   tattooTransform: TattooTransform;
   tattooAsset: TattooAssetState | null;
   transformRevision: number;
-  surfaceFitStrength: number;
   shadingGeometryAssistEnabled: boolean;
   bodySurfaceState: BodySurfaceState;
 }
@@ -92,6 +90,8 @@ interface AppElements {
   fabricLayer: HTMLCanvasElement;
   bodyUploadInput: HTMLInputElement;
   tattooUploadInput: HTMLInputElement;
+  bodyUploadStatus: HTMLDivElement;
+  tattooUploadStatus: HTMLDivElement;
   editBodyButton: HTMLButtonElement;
   removeBodyButton: HTMLButtonElement;
   editTattooButton: HTMLButtonElement;
@@ -99,8 +99,6 @@ interface AppElements {
   debugMeshInput: HTMLInputElement;
   shadingGeometryAssistInput: HTMLInputElement;
   opacityInput: HTMLInputElement;
-  surfaceFitInput: HTMLInputElement;
-  surfaceFitOutput: HTMLOutputElement;
   paramX: HTMLInputElement;
   paramY: HTMLInputElement;
   paramScale: HTMLInputElement;
@@ -162,6 +160,7 @@ export async function startApp(): Promise<void> {
     state,
     elements: {
       tattooUploadInput: elements.tattooUploadInput,
+      tattooUploadStatus: elements.tattooUploadStatus,
       statusLabel: elements.statusLabel,
       editTattooButton: elements.editTattooButton,
       removeTattooButton: elements.removeTattooButton,
@@ -178,6 +177,7 @@ export async function startApp(): Promise<void> {
     state,
     elements: {
       bodyUploadInput: elements.bodyUploadInput,
+      bodyUploadStatus: elements.bodyUploadStatus,
       editBodyButton: elements.editBodyButton,
       removeBodyButton: elements.removeBodyButton,
       statusLabel: elements.statusLabel,
@@ -209,7 +209,7 @@ function initializeAppShell(): AppElements {
     throw new Error("Missing #app root.");
   }
 
-  root.innerHTML = createAppMarkup(initialTransform, defaultSurfaceFitStrength);
+  root.innerHTML = createAppMarkup(initialTransform);
   const canvasFrame = getElement<HTMLDivElement>("canvasFrame");
   canvasFrame.innerHTML = createCanvasMarkup();
   const elements = getAppElements();
@@ -225,6 +225,8 @@ function getAppElements(): AppElements {
     fabricLayer: getElement<HTMLCanvasElement>("fabricLayer"),
     bodyUploadInput: getElement<HTMLInputElement>("bodyUpload"),
     tattooUploadInput: getElement<HTMLInputElement>("tattooUpload"),
+    bodyUploadStatus: getElement<HTMLDivElement>("bodyUploadStatus"),
+    tattooUploadStatus: getElement<HTMLDivElement>("tattooUploadStatus"),
     editBodyButton: getElement<HTMLButtonElement>("editBody"),
     removeBodyButton: getElement<HTMLButtonElement>("removeBody"),
     editTattooButton: getElement<HTMLButtonElement>("editTattoo"),
@@ -232,8 +234,6 @@ function getAppElements(): AppElements {
     debugMeshInput: getElement<HTMLInputElement>("debugMesh"),
     shadingGeometryAssistInput: getElement<HTMLInputElement>("shadingGeometryAssist"),
     opacityInput: getElement<HTMLInputElement>("opacity"),
-    surfaceFitInput: getElement<HTMLInputElement>("surfaceFitStrength"),
-    surfaceFitOutput: getElement<HTMLOutputElement>("surfaceFitStrengthValue"),
     paramX: getElement<HTMLInputElement>("paramX"),
     paramY: getElement<HTMLInputElement>("paramY"),
     paramScale: getElement<HTMLInputElement>("paramScale"),
@@ -255,7 +255,6 @@ function initializeAppState(
     tattooTransform: { ...initialTransform },
     tattooAsset: null,
     transformRevision: 0,
-    surfaceFitStrength: defaultSurfaceFitStrength,
     shadingGeometryAssistEnabled: false,
     bodySurfaceState: {
       texture: Texture.from(defaultBodyCanvas),
@@ -335,13 +334,6 @@ function installTransformControls(
 
   elements.opacityInput.addEventListener("input", () => setOpacity(Number(elements.opacityInput.value)));
   elements.paramOpacity.addEventListener("input", () => setOpacity(Number(elements.paramOpacity.value)));
-  elements.surfaceFitInput.addEventListener("input", () => {
-    const strength = clamp(Number(elements.surfaceFitInput.value), 0, 5);
-    state.surfaceFitStrength = strength;
-    elements.surfaceFitOutput.textContent = formatSurfaceFitStrength(strength);
-    pixi.setSurfaceIntensity(strength);
-    refreshSurfaceStatus(state, elements);
-  });
   elements.shadingGeometryAssistInput.addEventListener("change", () => {
     state.shadingGeometryAssistEnabled = elements.shadingGeometryAssistInput.checked;
     refreshLocalSurface(state, elements, pixi);
@@ -357,6 +349,7 @@ function renderBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
     texture: state.bodySurfaceState.texture,
     surfaceNormalTexture: state.bodySurfaceState.surfaceNormalTexture,
     placementRect: state.bodySurfaceState.placementRect,
+    mask: state.bodySurfaceState.mask,
     mesh: state.bodySurfaceState.mesh,
   };
 
@@ -401,6 +394,9 @@ function installDebugAndResetControls(
   setTransform: SetTattooTransform,
 ): void {
   elements.debugMeshInput.addEventListener("change", () => {
+    // WHY: 显示开关可能在 body mesh 刚替换后触发，主动重绘可避免只改 visible 却沿用旧 Graphics 路径。
+    // TRADE-OFF: 多一次轻量线框生成，但让 Show body mesh 与当前 body 状态严格同步。
+    pixi.setSkinDebugMesh(null);
     pixi.setDebugMeshVisible(elements.debugMeshInput.checked);
   });
   elements.resetButton.addEventListener("click", () => {
@@ -438,12 +434,12 @@ function refreshSurfaceStatus(state: AppState, elements: AppElements): void {
   if (!debug) {
     return;
   }
-  elements.statusLabel.textContent = formatLocalSurfaceStatus(debug, state.surfaceFitStrength);
+  elements.statusLabel.textContent = formatLocalSurfaceStatus(debug);
 }
 
-function formatLocalSurfaceStatus(debug: BodySurfaceAnalysisDebugState, fitStrength: number): string {
+function formatLocalSurfaceStatus(debug: BodySurfaceAnalysisDebugState): string {
   if (debug.source === "insufficient-mesh") {
-    return `Surface: insufficient local mesh / warp disabled / fit ${formatSurfaceFitStrength(fitStrength)}`;
+    return "Surface: insufficient local mesh / warp disabled";
   }
 
   const shading = debug.shading?.used
@@ -451,7 +447,7 @@ function formatLocalSurfaceStatus(debug: BodySurfaceAnalysisDebugState, fitStren
     : debug.shading?.enabled
       ? ` / shading ${debug.shading.reason}`
       : " / shading off";
-  return `Surface: local mesh / ${debug.proxy ?? "proxy"} / warp ${describeWarp(debug.normalStats?.meanNormalXY ?? 0)}${shading} / fit ${formatSurfaceFitStrength(fitStrength)}`;
+  return `Surface: local mesh / ${debug.proxy ?? "proxy"} / warp ${describeWarp(debug.normalStats?.meanNormalXY ?? 0)}${shading}`;
 }
 
 function resetBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
@@ -487,8 +483,6 @@ function syncPanelFromTransform(state: AppState, elements: AppElements): void {
   elements.paramRotation.value = String(Math.round(radiansToDegrees(state.tattooTransform.rotation)));
   elements.paramOpacity.value = state.tattooTransform.opacity.toFixed(2);
   elements.opacityInput.value = state.tattooTransform.opacity.toFixed(2);
-  elements.surfaceFitInput.value = state.surfaceFitStrength.toFixed(2);
-  elements.surfaceFitOutput.textContent = formatSurfaceFitStrength(state.surfaceFitStrength);
 }
 
 function replaceSurfaceNormalTexture(

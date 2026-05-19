@@ -2,8 +2,6 @@ import { radiansToDegrees } from "./editorTransform";
 import { stageSize } from "./sphereConfig";
 import type { TattooTransform } from "./domain/types";
 
-export const defaultSurfaceFitStrength = 1.4;
-
 export function createCanvasMarkup(): string {
   return `
     <div class="stage-shell">
@@ -17,7 +15,6 @@ export function createCanvasMarkup(): string {
 
 export function createAppMarkup(
   initialTransform: TattooTransform,
-  surfaceFitStrength = defaultSurfaceFitStrength,
 ): string {
   return `
     <main class="studio-shell">
@@ -38,6 +35,7 @@ export function createAppMarkup(
             <span>Upload body photo</span>
             <input id="bodyUpload" type="file" accept="image/png,image/jpeg,image/webp" />
           </label>
+          <div class="upload-status" id="bodyUploadStatus">No body uploaded</div>
           <div class="action-row">
             <button id="editBody" type="button">Edit mesh</button>
             <button id="removeBody" type="button">Remove</button>
@@ -46,6 +44,7 @@ export function createAppMarkup(
             <span>Upload tattoo</span>
             <input id="tattooUpload" type="file" accept="image/png,image/jpeg,image/webp" />
           </label>
+          <div class="upload-status" id="tattooUploadStatus">No tattoo uploaded</div>
           <div class="action-row">
             <button id="editTattoo" type="button" disabled>Edit crop</button>
             <button id="removeTattoo" type="button" disabled>Remove</button>
@@ -61,11 +60,6 @@ export function createAppMarkup(
             <label>
               <span>Opacity</span>
               <input id="opacity" type="range" min="0.25" max="1" step="0.01" value="${initialTransform.opacity}" />
-            </label>
-            <label>
-              <span>Fit strength</span>
-              <output id="surfaceFitStrengthValue">${surfaceFitStrength.toFixed(2)}x</output>
-              <input id="surfaceFitStrength" type="range" min="0" max="5" step="0.05" value="${surfaceFitStrength.toFixed(2)}" />
             </label>
             <label class="toggle-line">
               <input id="shadingGeometryAssist" type="checkbox" />

@@ -13,7 +13,6 @@ const renderer = {
   canvas: document.createElement("canvas"),
   setBodySurface: vi.fn(),
   setSurfaceNormalTexture: vi.fn(),
-  setSurfaceIntensity: vi.fn(),
   setTattoo: vi.fn(),
   clearTattoo: vi.fn(),
   setDebugMeshVisible: vi.fn(),
@@ -73,32 +72,13 @@ describe("startApp initial tattoo state", () => {
     expect(transformPanel?.hidden).toBe(true);
     expect(document.querySelector("#depthModel")).toBeNull();
     expect(document.body.textContent).not.toContain("Depth model");
-    expect(document.querySelector("#surfaceFitStrength")).toBeInstanceOf(HTMLInputElement);
-    expect(document.querySelector<HTMLInputElement>("#surfaceFitStrength")?.max).toBe("5");
+    expect(document.querySelector("#surfaceFitStrength")).toBeNull();
+    expect(document.querySelector("#surfaceFitStrengthValue")).toBeNull();
     expect(document.body.textContent).not.toContain("Surface intensity");
+    expect(document.body.textContent).not.toContain("Fit strength");
     expect(document.querySelector("#debugBodyAnalysis")).toBeNull();
     expect(document.body.textContent).not.toContain("Show body analysis");
     expect(document.querySelector("#status")?.textContent).toContain("Upload tattoo");
-  });
-
-  test("fit strength slider updates renderer intensity and visible value", async () => {
-    document.body.innerHTML = `<div id="app"></div>`;
-    installImageDecodeStub();
-    installCanvasContextStub();
-
-    const { startApp } = await import("../src/app");
-    await startApp();
-
-    const slider = document.querySelector<HTMLInputElement>("#surfaceFitStrength");
-    const output = document.querySelector<HTMLOutputElement>("#surfaceFitStrengthValue");
-    expect(slider).toBeInstanceOf(HTMLInputElement);
-    expect(output).toBeInstanceOf(HTMLOutputElement);
-
-    slider!.value = "4.85";
-    slider!.dispatchEvent(new Event("input"));
-
-    expect(renderer.setSurfaceIntensity).toHaveBeenCalledWith(4.85);
-    expect(output?.textContent).toBe("4.85x");
   });
 
   test("live Fabric transform does not rebuild the body surface", async () => {

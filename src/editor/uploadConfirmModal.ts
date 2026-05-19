@@ -1,5 +1,5 @@
 import Cropper, { DEFAULT_TEMPLATE } from "cropperjs";
-import { cropCanvasToCanvas, type CropRect } from "../image/cropCanvas";
+import { cropCanvasToProjectionSafeCanvas, type CropRect } from "../image/cropCanvas";
 
 export type UploadProcessingMode = "line-art" | "original";
 
@@ -35,6 +35,7 @@ type CropperSelectionElement = HTMLElement & {
 
 type CropperImageElement = HTMLElement & {
   $getTransform?: () => number[];
+  $ready?: (callback?: () => void) => Promise<unknown>;
 };
 
 type AffineMatrix = [number, number, number, number, number, number];
@@ -78,7 +79,7 @@ const tattooCropperTemplate = DEFAULT_TEMPLATE.replace(
 export function openUploadConfirmModal(
   input: UploadConfirmModalInput,
 ): Promise<UploadConfirmResult | null> {
-  const cropCanvas = input.cropCanvas ?? cropCanvasToCanvas;
+  const cropCanvas = input.cropCanvas ?? cropCanvasToProjectionSafeCanvas;
   const overlay = createModal(input);
   const options = [...input.options];
   let selectedMode = getInitialMode({ ...input, options });
@@ -267,11 +268,14 @@ function createTattooCropper(
       throw new Error("Cropper elements were not created.");
     }
 
-    setSelectionCrop(selection, sourceCropRectToCropperSelection(
-      crop,
-      getCropperImageTransform(image),
-      source,
-    ));
+    applySourceCropToSelection(selection, image, source, crop);
+    if (typeof image.$ready === "function") {
+      void image.$ready(() => {
+        // WHY: Cropper.js 会在图片 ready 后重新计算 contain/center transform，必须二次应用源图 crop 才不会退回模板 initial-coverage。
+        // TRADE-OFF: 首帧可能短暂显示默认框，但 ready 后 selection 与真实内容边界一致。
+        applySourceCropToSelection(selection, image, source, crop);
+      });
+    }
     return { selection, image, destroy: () => cropper.destroy() };
   } catch {
     return createStaticCropperFallback(previewCanvas, source, crop);
@@ -312,6 +316,19 @@ function setSelectionCrop(selection: CropperSelectionElement, crop: CropperSelec
   selection.y = crop.y;
   selection.width = crop.width;
   selection.height = crop.height;
+}
+
+function applySourceCropToSelection(
+  selection: CropperSelectionElement,
+  image: CropperImageElement | null,
+  source: HTMLCanvasElement,
+  crop: CropRect,
+): void {
+  setSelectionCrop(selection, sourceCropRectToCropperSelection(
+    crop,
+    getCropperImageTransform(image),
+    source,
+  ));
 }
 
 function getActiveCropRect(

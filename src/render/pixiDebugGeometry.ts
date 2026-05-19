@@ -2,6 +2,8 @@ import { Graphics } from "pixi.js";
 import { buildSphereWireframeSegments, type SphereMeshData } from "../domain/sphereMesh";
 import type { BodySurfaceAnalysisDebugState, SkinMeshData } from "../domain/types";
 
+export const activeDebugMeshStrokeStyle = { color: 0xd04f24, width: 1, alpha: 0.74 };
+
 export function createSkinWireframeSegments(mesh: SkinMeshData): Float32Array {
   const segments: number[] = [];
   const seen = new Set<string>();
@@ -43,7 +45,22 @@ export function drawActiveDebugMesh(graphics: Graphics, mesh: SkinMeshData | nul
     graphics.lineTo(segments[i + 2], segments[i + 3]);
   }
 
-  graphics.stroke({ color: 0x834336, width: 1, alpha: 0.7 });
+  graphics.stroke(activeDebugMeshStrokeStyle);
+}
+
+export function syncDebugMeshWireframe(
+  graphics: Graphics,
+  visible: boolean,
+  mesh: SkinMeshData | null,
+): void {
+  graphics.visible = visible;
+  if (!visible) {
+    return;
+  }
+
+  // WHY: Show body mesh 是调试当前 body 分割结果的开关，开启瞬间必须重绘当前 mesh，不能依赖上一次缓存路径。
+  // TRADE-OFF: 每次打开都会重新生成线段，但 mesh 规模较小，换来状态一致和可见性确定性。
+  drawActiveDebugMesh(graphics, mesh);
 }
 
 export function drawBodyAnalysisDebug(graphics: Graphics, state: BodySurfaceAnalysisDebugState | null): void {

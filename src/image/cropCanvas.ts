@@ -34,9 +34,44 @@ export function cropCanvasToCanvas(
     width: source.width,
     height: source.height,
   });
+  return drawCropToCanvas(source, rect, 0, createCanvas);
+}
+
+export function cropCanvasToPaddedCanvas(
+  source: HTMLCanvasElement,
+  crop: CropRect,
+  padding: number,
+  createCanvas: CanvasFactory = () => document.createElement("canvas"),
+): HTMLCanvasElement {
+  const rect = normalizeCropRect(crop, {
+    width: source.width,
+    height: source.height,
+  });
+  return drawCropToCanvas(source, rect, Math.max(0, Math.round(padding)), createCanvas);
+}
+
+export function cropCanvasToProjectionSafeCanvas(
+  source: HTMLCanvasElement,
+  crop: CropRect,
+  createCanvas: CanvasFactory = () => document.createElement("canvas"),
+): HTMLCanvasElement {
+  const rect = normalizeCropRect(crop, {
+    width: source.width,
+    height: source.height,
+  });
+  const padding = getProjectionSafePadding(rect);
+  return drawCropToCanvas(source, rect, padding, createCanvas);
+}
+
+function drawCropToCanvas(
+  source: HTMLCanvasElement,
+  rect: CropRect,
+  padding: number,
+  createCanvas: CanvasFactory,
+): HTMLCanvasElement {
   const output = createCanvas();
-  output.width = rect.width;
-  output.height = rect.height;
+  output.width = rect.width + padding * 2;
+  output.height = rect.height + padding * 2;
   const context = output.getContext("2d");
 
   if (!context) {
@@ -50,13 +85,19 @@ export function cropCanvasToCanvas(
     rect.y,
     rect.width,
     rect.height,
-    0,
-    0,
+    padding,
+    padding,
     rect.width,
     rect.height,
   );
 
   return output;
+}
+
+function getProjectionSafePadding(rect: CropRect): number {
+  // WHY: Pixi shader/Fabric 控制框都会按 texture 边界裁剪；给 tattoo 透明边距可避免头发、文字等贴边像素被线性采样和控制框硬边吃掉。
+  // TRADE-OFF: 控制框会比可见 tattoo 略大，但可见内容尺寸保持不变，比让用户反复手动多裁一圈更稳定。
+  return clamp(Math.round(Math.max(rect.width, rect.height) * 0.04), 8, 32);
 }
 
 function clamp(value: number, min: number, max: number): number {
