@@ -7,6 +7,7 @@ import {
 } from "../src/appUploadQueue";
 import type { Texture } from "pixi.js";
 import type { TattooTransform } from "../src/domain/types";
+import type { UploadWorkflowState } from "../src/appUploadWorkflow";
 
 const openUploadConfirmModal = vi.fn();
 
@@ -283,9 +284,58 @@ describe("installUploadWorkflow", () => {
     expect(renderTattoo).toHaveBeenCalled();
     expect(statusLabel.textContent).toBe("Upload tattoo to enable transform controls");
   });
+
+  test("edit crop preserves existing transform scale and seeds previous crop state", async () => {
+    const { installUploadWorkflow } = await import("../src/appUploadWorkflow");
+    const tattooUploadInput = document.createElement("input");
+    const editTattooButton = document.createElement("button");
+    const removeTattooButton = document.createElement("button");
+    const statusLabel = document.createElement("div");
+    const fabric = createFabricStub();
+    const previousCropRect = { x: 2, y: 3, width: 7, height: 8 };
+    const confirmedCropRect = { x: 1, y: 1, width: 6, height: 6 };
+    const confirmedCanvas = createCanvasStub(48, 32);
+    const state = createWorkflowState();
+    const existingAsset = state.tattooAsset;
+    if (!existingAsset) {
+      throw new Error("Expected workflow test state to include an existing tattoo asset.");
+    }
+
+    state.tattooTransform = { ...state.tattooTransform, scale: 0.42 };
+    state.tattooAsset = {
+      ...existingAsset,
+      selectedMode: "line-art",
+      cropRect: previousCropRect,
+    };
+
+    installCanvasDocumentStub();
+    openUploadConfirmModal.mockResolvedValue({
+      canvas: confirmedCanvas,
+      mode: "original",
+      cropRect: confirmedCropRect,
+    });
+
+    installUploadWorkflow({
+      state,
+      elements: { tattooUploadInput, statusLabel, editTattooButton, removeTattooButton },
+      fabric,
+      initialTransform: transform,
+      renderTattoo: vi.fn(),
+      syncPanelFromTransform: vi.fn(),
+    });
+
+    editTattooButton.click();
+    await waitFor(() => expect(fabric.setImage).toHaveBeenCalledTimes(1));
+
+    const modalInput = openUploadConfirmModal.mock.calls[0]?.[0];
+    expect(modalInput.initialMode).toBe("line-art");
+    expect(modalInput.initialCropRect).toEqual(previousCropRect);
+    expect(fabric.setImage.mock.calls[0]?.[1].scale).toBe(0.42);
+    expect(state.tattooTransform.scale).toBe(0.42);
+  });
 });
 
-function createWorkflowState() {
+function createWorkflowState(): UploadWorkflowState {
   return {
     tattooTransform: { ...transform },
     tattooAsset: {

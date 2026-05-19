@@ -51,6 +51,12 @@ interface ProcessedUploadOptions {
   options: ProcessedTattooOption[];
 }
 
+interface UpdateTattooFromSourceOptions {
+  initialMode?: UploadProcessingMode;
+  initialCropRect?: CropRect;
+  preserveTransform?: boolean;
+}
+
 const tattooUploadMaxEdge = Math.max(defaultTattooSize.width, defaultTattooSize.height);
 
 export function installUploadWorkflow(input: UploadWorkflowInput): void {
@@ -97,6 +103,7 @@ export function installUploadWorkflow(input: UploadWorkflowInput): void {
       {
         initialMode: asset.selectedMode,
         initialCropRect: asset.cropRect,
+        preserveTransform: true,
       },
     );
   });
@@ -142,7 +149,7 @@ async function updateTattooFromSource(
   requestId: number,
   isCurrentRequest: IsCurrentRequest,
   runCurrentFabricUpdate: RunCurrentFabricUpdate,
-  editState?: { initialMode: UploadProcessingMode; initialCropRect: CropRect },
+  options: UpdateTattooFromSourceOptions = {},
 ): Promise<void> {
   try {
     const startTransformRevision = input.state.transformRevision;
@@ -150,8 +157,8 @@ async function updateTattooFromSource(
     const processedOptions = createProcessedOptionsFromCanvas(sourceCanvas);
     const confirmed = await openUploadConfirmModal({
       fileName,
-      initialMode: editState?.initialMode ?? getInitialUploadMode(processedOptions.options),
-      initialCropRect: editState?.initialCropRect,
+      initialMode: options.initialMode ?? getInitialUploadMode(processedOptions.options),
+      initialCropRect: options.initialCropRect,
       options: processedOptions.options,
     });
 
@@ -167,15 +174,24 @@ async function updateTattooFromSource(
     const canvas = confirmed.canvas;
     const dataUrl = canvas.toDataURL("image/png");
     let committedTransform: TattooTransform | null = null;
+    const getCommitTransform = (): TattooTransform => {
+      if (options.preserveTransform) {
+        // WHY: 编辑裁剪只替换纹理与裁剪元数据，不能复用新上传的默认缩放归一逻辑。
+        // TRADE-OFF: 若用户在编辑 modal 打开期间调整 transform，提交时会保留最新 transform，而不是打开 modal 时的快照。
+        return { ...input.state.tattooTransform };
+      }
+
+      return getUploadCommitTransform(input.state, startTransformRevision);
+    };
 
     const didUpdateFabric = await runCurrentFabricUpdate(
       requestId,
       (shouldCommit) => input.fabric.setImage(
         dataUrl,
-        getUploadCommitTransform(input.state, startTransformRevision),
+        getCommitTransform(),
         shouldCommit,
         () => {
-          const nextTransform = getUploadCommitTransform(input.state, startTransformRevision);
+          const nextTransform = getCommitTransform();
           committedTransform = nextTransform;
           return nextTransform;
         },
