@@ -106,7 +106,11 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
       // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
       input.setTransform(centeredTransform, "body-apply");
       input.renderBodySurface();
-      destroyTextureAfterPixiRebind(previousBodyTexture);
+      // WHY: Pixi 会按 canvas resource 缓存 Texture，同 canvas 编辑可能返回仍在使用的同一实例。
+      // TRADE-OFF: 只跳过同一对象的销毁；真正替换出的旧 texture 仍按既有顺序在 rebind 后释放。
+      if (previousBodyTexture !== input.state.bodySurfaceState.texture) {
+        destroyTextureAfterPixiRebind(previousBodyTexture);
+      }
       input.elements.statusLabel.textContent = surfaceSummary.status;
     } catch (error) {
       if (!isCurrentRequest()) {

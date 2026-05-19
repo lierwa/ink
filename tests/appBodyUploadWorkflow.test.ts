@@ -141,6 +141,52 @@ describe("installBodyUploadWorkflow", () => {
     expect(lifecycleCalls).toEqual(["render replacement body", "destroy old body"]);
   });
 
+  test("keeps active body texture alive when Pixi returns the cached canvas texture", async () => {
+    const state = createBodyWorkflowState();
+    const cachedBodyTexture = {
+      source: state.bodySurfaceState.sourceCanvas,
+      destroy: vi.fn(),
+    };
+    state.bodySurfaceState.texture = cachedBodyTexture;
+    mocks.textureFrom.mockImplementation((source: unknown) => {
+      if (source === state.bodySurfaceState.sourceCanvas) {
+        return cachedBodyTexture;
+      }
+      return { source };
+    });
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(64, 32),
+      },
+    }));
+    const editBodyButton = document.createElement("button");
+    const renderBodySurface = vi.fn();
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        editBodyButton,
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform: vi.fn(),
+      renderBodySurface,
+      resetBodySurface: vi.fn(),
+    });
+
+    editBodyButton.click();
+
+    await vi.waitFor(() => expect(renderBodySurface).toHaveBeenCalledTimes(1));
+    expect(state.bodySurfaceState.texture).toBe(cachedBodyTexture);
+    expect(cachedBodyTexture.destroy).not.toHaveBeenCalled();
+  });
+
   test("edit body reopens modal with stored source canvas and params", async () => {
     const state = createBodyWorkflowState();
     const editBodyButton = document.createElement("button");
