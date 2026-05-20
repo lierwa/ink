@@ -65,6 +65,34 @@ describe("buildTattooWarpMesh", () => {
     expect(mesh.positions.length).not.toBe((8 + 1) * (6 + 1) * 2);
   });
 
+  test("clips body patch triangles to the tattoo source bounds", () => {
+    const bodyMesh: SkinMeshData = {
+      positions: new Float32Array([
+        130, 120,
+        360, 120,
+        360, 260,
+        130, 260,
+      ]),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    };
+
+    const mesh = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      bodyMesh,
+    });
+
+    expect(mesh).not.toBeNull();
+    if (!mesh) {
+      throw new Error("Expected clipped body-patch tattoo warp mesh.");
+    }
+
+    expect(Math.min(...Array.from(mesh.uvs))).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...Array.from(mesh.uvs))).toBeLessThanOrEqual(1);
+    expect(mesh.indices.length).toBeGreaterThan(0);
+  });
+
   test("builds a subdivided mesh with tattoo uvs and triangle indices", () => {
     const mesh = buildTattooWarpMesh({
       tattooSize: { width: 200, height: 120 },

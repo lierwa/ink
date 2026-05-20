@@ -150,7 +150,9 @@ describe("refreshLocalSurfaceForTattooRender", () => {
 
     expect(state.tattooWarpMesh).not.toBeNull();
     expect(state.tattooWarpMesh?.stats.maxDisplacementPx).toBeGreaterThan(10);
-    expect(state.tattooWarpMesh?.positions.length).toBe(state.bodySurfaceState.mesh.positions.length);
+    expect(state.tattooWarpMesh?.positions.length).toBeLessThan(100);
+    expect(Math.min(...Array.from(state.tattooWarpMesh?.uvs ?? []))).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...Array.from(state.tattooWarpMesh?.uvs ?? []))).toBeLessThanOrEqual(1);
     expect(pixi.setTattoo).toHaveBeenCalledWith(expect.objectContaining({
       warpMesh: state.tattooWarpMesh,
     }));
