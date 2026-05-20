@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildTattooWarpMesh } from "../../src/domain/tattooWarpMesh";
+import { buildTattooWarpMesh, mapTattooSourceToStage } from "../../src/domain/tattooWarpMesh";
 import type { BodySurfaceAnalysisDebugState, TattooTransform } from "../../src/domain/types";
 
 const transform: TattooTransform = {
@@ -61,6 +61,25 @@ describe("buildTattooWarpMesh", () => {
       throw new Error("Expected tattoo warp mesh.");
     }
 
+    const xs = Array.from(mesh.positions).filter((_, index) => index % 2 === 0);
+    const ys = Array.from(mesh.positions).filter((_, index) => index % 2 === 1);
+    expect(Math.min(...xs)).toBeGreaterThan(100);
+    expect(Math.max(...xs)).toBeLessThan(380);
+    expect(Math.min(...ys)).toBeGreaterThan(80);
+    expect(Math.max(...ys)).toBeLessThan(280);
+
+    const centerVertexIndex = 4 * (12 + 1) + 6;
+    const centerOffset = centerVertexIndex * 2;
+    const centerPosition = {
+      x: mesh.positions[centerOffset],
+      y: mesh.positions[centerOffset + 1],
+    };
+    const flatCenter = mapTattooSourceToStage({ x: 100, y: 60 }, { width: 200, height: 120 }, transform);
+    expect(centerPosition.x).toBeGreaterThan(100);
+    expect(centerPosition.x).toBeLessThan(380);
+    expect(centerPosition.y).toBeGreaterThan(80);
+    expect(centerPosition.y).toBeLessThan(280);
+    expect(Math.hypot(centerPosition.x - flatCenter.x, centerPosition.y - flatCenter.y)).toBeGreaterThan(3);
     expect(mesh.stats.maxDisplacementPx).toBeGreaterThan(12);
     expect(mesh.stats.meanDisplacementPx).toBeGreaterThan(3);
     expect(mesh.controlPoints.length).toBeGreaterThanOrEqual(9);
@@ -90,8 +109,6 @@ describe("buildTattooWarpMesh", () => {
     expect(Number.isFinite(firstLine?.destination.y)).toBe(true);
 
     const flatRightEdge = transform.x + (200 * transform.scale) / 2;
-    const center = { x: 100, y: 60 };
-    const flatCenter = { x: transform.x, y: transform.y };
     let hasAdjacentPair = false;
     let hasRightEdgeExpansion = false;
     let hasCenterWarp = false;
@@ -113,12 +130,8 @@ describe("buildTattooWarpMesh", () => {
       expect((isHorizontal || isVertical) && hasFiniteDestinations).toBe(true);
       hasAdjacentPair ||= isHorizontal || isVertical;
       hasRightEdgeExpansion ||= start.destination.x > flatRightEdge || end.destination.x > flatRightEdge;
-      hasCenterWarp ||=
-        Math.hypot(start.source.x - center.x, start.source.y - center.y) < 1 &&
-        Math.hypot(start.destination.x - flatCenter.x, start.destination.y - flatCenter.y) > 3;
-      hasCenterWarp ||=
-        Math.hypot(end.source.x - center.x, end.source.y - center.y) < 1 &&
-        Math.hypot(end.destination.x - flatCenter.x, end.destination.y - flatCenter.y) > 3;
+      hasCenterWarp ||= isDisplacedFromFlatStage(start);
+      hasCenterWarp ||= isDisplacedFromFlatStage(end);
       hasTiltedAdjacentSegment ||=
         Math.abs(end.destination.x - start.destination.x) > 1 &&
         Math.abs(end.destination.y - start.destination.y) > 1;
@@ -128,3 +141,11 @@ describe("buildTattooWarpMesh", () => {
     expect(hasRightEdgeExpansion || hasCenterWarp || hasTiltedAdjacentSegment).toBe(true);
   });
 });
+
+function isDisplacedFromFlatStage(line: {
+  source: { x: number; y: number };
+  destination: { x: number; y: number };
+}): boolean {
+  const flat = mapTattooSourceToStage(line.source, { width: 200, height: 120 }, transform);
+  return Math.hypot(line.destination.x - flat.x, line.destination.y - flat.y) > 3;
+}
