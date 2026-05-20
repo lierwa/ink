@@ -111,6 +111,12 @@ export interface TattooSpriteBindingTarget {
   visible: boolean;
 }
 
+export interface TattooClearRenderTargets {
+  tattooMesh: { visible: boolean };
+  tattooSprite: Pick<TattooSpriteBindingTarget, "texture" | "alpha" | "visible">;
+  tattooWarpDebug: Pick<Graphics, "clear">;
+}
+
 export async function createPixiTattooRenderer(
   input: PixiRendererInput,
 ): Promise<PixiTattooRenderer> {
@@ -264,9 +270,11 @@ export async function createPixiTattooRenderer(
     },
     clearTattoo() {
       currentTattooState = null;
-      clearTattooState(resources, shader);
-      applyTattooMeshVisibilityState(tattooMesh, 0);
-      clearTattooSpriteState(tattooSprite);
+      clearTattooRenderState(resources, shader, {
+        tattooMesh,
+        tattooSprite,
+        tattooWarpDebug,
+      });
     },
     setDebugMeshVisible(visible) {
       syncDebugMeshWireframe(debugWireframe, visible, skinDebugMeshOverride ?? bodyMesh);
@@ -331,6 +339,19 @@ export function clearTattooState(
   resources.uTexture = getSafeFallbackTextureSource();
   resources.tattooUniforms.uniforms.uTattooOpacity = 0;
   shader.resources.uTexture = resources.uTexture;
+}
+
+export function clearTattooRenderState(
+  resources: TattooShaderResources,
+  shader: TattooShaderBindingTarget,
+  targets: TattooClearRenderTargets,
+): void {
+  clearTattooState(resources, shader);
+  applyTattooMeshVisibilityState(targets.tattooMesh, 0);
+  clearTattooSpriteState(targets.tattooSprite);
+  // WHY: warp debug Graphics 会保留上一条绘制路径；清 tattoo 时必须同步清空，避免下次打开 debug 看到陈旧网格。
+  // TRADE-OFF: 清理动作集中在 renderer 生命周期 helper，增加一个小抽象来换取可测试的目标状态收口。
+  targets.tattooWarpDebug.clear();
 }
 
 export function applyTattooSpriteState(

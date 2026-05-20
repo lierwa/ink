@@ -13,6 +13,7 @@ import {
   applyTattooMeshVisibilityState,
   createSkinMaskAlphaPixels,
   createTattooShaderResources,
+  clearTattooRenderState,
   createSkinWireframeSegments,
   createBodyAnalysisDebugSegments,
   hiddenMaskRenderableFlag,
@@ -179,6 +180,38 @@ describe("tattoo shader state binding", () => {
     clearTattooState(resources, shader);
     expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0);
     expect(shader.resources.uTexture).toBe(Texture.WHITE.source);
+  });
+
+  test("clearTattoo path clears the warped debug overlay target", () => {
+    const resources = createTattooShaderResources({
+      stageSize: { width: 900, height: 620 },
+      tattooSize: { width: 12, height: 9 },
+      transform: {
+        x: 450,
+        y: 310,
+        scale: 1,
+        rotation: 0,
+        opacity: 0.84,
+      },
+    });
+    const shader = { resources: { uTexture: { id: "previous-texture" } } };
+    const tattooMesh = { visible: true };
+    const tattooSprite = {
+      texture: Texture.WHITE,
+      alpha: 1,
+      visible: true,
+    };
+    const tattooWarpDebug = { clear: vi.fn() };
+
+    clearTattooRenderState(resources, shader, {
+      tattooMesh,
+      tattooSprite,
+      tattooWarpDebug,
+    });
+
+    expect(tattooWarpDebug.clear).toHaveBeenCalledOnce();
+    expect(tattooMesh.visible).toBe(false);
+    expect(tattooSprite.visible).toBe(false);
   });
 });
 
