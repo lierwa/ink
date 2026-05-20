@@ -21,6 +21,7 @@ import {
   tattooProjectionFragmentHeader,
   tattooProjectionFragmentMain,
   resolveFlatFallbackHidden,
+  resolveTattooGeometryMesh,
 } from "../../src/render/pixiRenderer";
 import { activeDebugMeshStrokeStyle, drawActiveDebugMesh, syncDebugMeshWireframe } from "../../src/render/pixiDebugGeometry";
 import type { SkinMeshData } from "../../src/domain/types";
@@ -39,7 +40,6 @@ describe("createTattooShaderResources", () => {
         rotation: 0,
         opacity: 0.84,
       },
-      surfaceDepth: 0.68,
     });
 
     expect("uTattooSize" in resources).toBe(false);
@@ -48,9 +48,9 @@ describe("createTattooShaderResources", () => {
     expect(resources.tattooUniforms.uniforms.uStageSize).toEqual(new Float32Array([900, 620]));
     expect(resources.tattooUniforms.uniforms.uTattooOpacity).toBe(0.84);
     expect(resources.tattooUniforms.uniforms.uSurfaceEnabled).toBe(0);
-    expect(resources.tattooUniforms.uniforms.uSurfaceDepth).toBe(0.68);
+    expect("uSurfaceDepth" in resources.tattooUniforms.uniforms).toBe(false);
     expect("uSurfaceIntensity" in resources.tattooUniforms.uniforms).toBe(false);
-    expect(resources.tattooUniforms.uniforms.uMaxWarpPx).toBe(56);
+    expect("uMaxWarpPx" in resources.tattooUniforms.uniforms).toBe(false);
     expect(resources.tattooUniforms.isUniformGroup).toBe(true);
   });
 });
@@ -97,7 +97,6 @@ describe("tattoo shader state binding", () => {
         rotation: 0,
         opacity: 0.84,
       },
-      surfaceDepth: 0.68,
     });
     const source = { id: "next-texture" } as unknown as Texture["source"];
     const shader = { resources: { uTexture: Texture.EMPTY.source } };
@@ -132,7 +131,6 @@ describe("tattoo shader state binding", () => {
         rotation: 0,
         opacity: 0.84,
       },
-      surfaceDepth: 0.68,
     });
     resources.tattooUniforms.uniforms.uTattooSize = null as unknown as Float32Array;
     resources.tattooUniforms.uniforms.uTattooTransform = null as unknown as Float32Array;
@@ -169,7 +167,6 @@ describe("tattoo shader state binding", () => {
         rotation: 0,
         opacity: 0.84,
       },
-      surfaceDepth: 0.68,
     });
     const source = { id: "next-texture" } as unknown as Texture["source"];
     const shader = { resources: { uTexture: source } };
@@ -357,7 +354,8 @@ describe("tattoo projection shader", () => {
     expect(tattooProjectionFragmentHeader).toContain("uniform sampler2D uSurfaceNormalTex;");
     expect(tattooProjectionFragmentHeader).toContain("uniform vec2 uStageSize;");
     expect(tattooProjectionFragmentHeader).not.toContain("uSurfaceIntensity");
-    expect(tattooProjectionFragmentHeader).toContain("uniform float uMaxWarpPx;");
+    expect(tattooProjectionFragmentHeader).not.toContain("uSurfaceDepth");
+    expect(tattooProjectionFragmentHeader).not.toContain("uMaxWarpPx");
   });
 });
 
@@ -489,6 +487,40 @@ describe("projection mesh fallback", () => {
   });
 });
 
+describe("tattoo geometry mesh resolution", () => {
+  test("keeps warped tattoo geometry across body surface refreshes", () => {
+    const activeProjectionMesh: SkinMeshData = {
+      positions: new Float32Array([10, 20, 120, 20, 10, 100]),
+      uvs: new Float32Array([10 / 900, 20 / 620, 120 / 900, 20 / 620, 10 / 900, 100 / 620]),
+      indices: new Uint32Array([0, 1, 2]),
+    };
+    const warpMesh = {
+      positions: new Float32Array([82, 43, 186, 58, 76, 155]),
+      uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+      indices: new Uint32Array([0, 1, 2]),
+      debugLines: [],
+      controlPoints: [],
+      stats: { maxDisplacementPx: 0, meanDisplacementPx: 0 },
+    };
+
+    const resolved = resolveTattooGeometryMesh(activeProjectionMesh, warpMesh);
+
+    expect(resolved).not.toBe(activeProjectionMesh);
+    expect(resolved.positions).toBe(warpMesh.positions);
+    expect(resolved.uvs).toBe(warpMesh.uvs);
+    expect(resolved.indices).toBe(warpMesh.indices);
+  });
+
+  test("uses active projection mesh before app integration provides a warped tattoo mesh", () => {
+    const activeProjectionMesh: SkinMeshData = {
+      positions: new Float32Array([10, 20, 120, 20, 10, 100]),
+      indices: new Uint32Array([0, 1, 2]),
+    };
+
+    expect(resolveTattooGeometryMesh(activeProjectionMesh, null)).toBe(activeProjectionMesh);
+  });
+});
+
 describe("projection mesh geometry", () => {
   test("maps sphere mesh into default skin mesh shape for renderer fallback", () => {
     const sphereMesh = buildSphereMesh({
@@ -567,7 +599,6 @@ describe("surface normal texture binding", () => {
         rotation: 0,
         opacity: 0.84,
       },
-      surfaceDepth: 0.68,
     });
     const shader = { resources: { uSurfaceNormalTex: Texture.EMPTY.source } };
 

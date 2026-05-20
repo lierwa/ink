@@ -87,8 +87,6 @@ export type TattooShaderResources = {
     uStageSize: { value: Float32Array; type: "vec2<f32>" };
     uTattooOpacity: { value: number; type: "f32" };
     uSurfaceEnabled: { value: number; type: "f32" };
-    uSurfaceDepth: { value: number; type: "f32" };
-    uMaxWarpPx: { value: number; type: "f32" };
   }>;
 };
 
@@ -100,8 +98,6 @@ export interface TattooShaderResourceInput {
   stageSize: Size;
   tattooSize: Size;
   transform: TattooTransform;
-  surfaceDepth: number;
-  maxWarpPx?: number;
 }
 
 export interface TattooSpriteBindingTarget {
@@ -114,11 +110,6 @@ export interface TattooSpriteBindingTarget {
   alpha: number;
   visible: boolean;
 }
-
-// WHY: 先保证贴图保真与稳定，避免 2.5D 体积感过强导致图案结构被拉裂。
-// TRADE-OFF: 视觉体积感会比原方案保守，但可显著降低“完全变样”风险。
-const defaultSurfaceDepth = 0.92;
-const defaultSurfaceWarpLimitPx = 56;
 
 export async function createPixiTattooRenderer(
   input: PixiRendererInput,
@@ -164,8 +155,6 @@ export async function createPixiTattooRenderer(
       rotation: 0,
       opacity: 0,
     },
-    surfaceDepth: defaultSurfaceDepth,
-    maxWarpPx: defaultSurfaceWarpLimitPx,
   });
   const shader = createTattooShader(resources);
   const tattooMesh = new Mesh({
@@ -235,7 +224,10 @@ export async function createPixiTattooRenderer(
       }
 
       const previousGeometry = tattooMesh.geometry;
-      tattooMesh.geometry = createMeshGeometry(activeProjectionMesh, input.stageSize);
+      tattooMesh.geometry = createMeshGeometry(
+        resolveTattooGeometryMesh(activeProjectionMesh, currentTattooState?.warpMesh ?? null),
+        input.stageSize,
+      );
       previousGeometry.destroy();
       syncDebugMeshWireframe(debugWireframe, debugWireframe.visible, skinDebugMeshOverride ?? bodyMesh);
       drawBodyAnalysisDebug(bodyAnalysisDebug, bodyAnalysisDebugState);
@@ -247,7 +239,10 @@ export async function createPixiTattooRenderer(
       const previousGeometry = tattooMesh.geometry;
       // WHY: TPS 已经把 tattoo local grid 烘焙成 stage positions + tattoo UV，shader 只应采样 mesh UV，避免再用 flat transform 二次变形。
       // TRADE-OFF: 每次 tattoo 状态更新会替换 geometry，但当前交互频率低于逐帧动画，换取渲染路径职责清晰。
-      tattooMesh.geometry = createMeshGeometry(tattooState.warpMesh ?? activeProjectionMesh, input.stageSize);
+      tattooMesh.geometry = createMeshGeometry(
+        resolveTattooGeometryMesh(activeProjectionMesh, tattooState.warpMesh),
+        input.stageSize,
+      );
       previousGeometry.destroy();
       applyTattooMeshVisibilityState(tattooMesh, tattooState.transform.opacity);
       applyTattooSpriteState(tattooSprite, tattooState, {
@@ -424,14 +419,6 @@ export function createTattooShaderResources(
         value: 0,
         type: "f32",
       },
-      uSurfaceDepth: {
-        value: input.surfaceDepth,
-        type: "f32",
-      },
-      uMaxWarpPx: {
-        value: input.maxWarpPx ?? defaultSurfaceWarpLimitPx,
-        type: "f32",
-      },
     }),
   };
 }
@@ -540,8 +527,6 @@ export const tattooProjectionFragmentHeader = `
       uniform vec2 uStageSize;
       uniform float uTattooOpacity;
       uniform float uSurfaceEnabled;
-      uniform float uSurfaceDepth;
-      uniform float uMaxWarpPx;
     `;
 
 const tattooProjectionBit: HighShaderBit = {
@@ -570,6 +555,23 @@ export function resolveProjectionMesh(
     return fallbackMesh;
   }
   return mesh;
+}
+
+export function resolveTattooGeometryMesh(
+  activeProjectionMesh: SkinMeshData,
+  warpMesh: TattooWarpMeshData | null,
+): SkinMeshData {
+  if (!warpMesh) {
+    return activeProjectionMesh;
+  }
+
+  // WHY: body surface refresh 会更新 body 投影网格，但已烘焙的 tattoo warp mesh 才是当前贴纸几何来源。
+  // TRADE-OFF: 返回 SkinMeshData 视图而不复制 buffer，避免刷新路径产生额外内存 churn。
+  return {
+    positions: warpMesh.positions,
+    uvs: warpMesh.uvs,
+    indices: warpMesh.indices,
+  };
 }
 
 export function mapSphereMeshToSkinMesh(mesh: SphereMeshData): SkinMeshData {
