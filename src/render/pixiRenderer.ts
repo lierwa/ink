@@ -228,8 +228,9 @@ export async function createPixiTattooRenderer(
       activeProjectionMesh = resolveProjectionMesh(state.mesh, fallbackProjectionMesh);
       currentSurfaceWarpEnabled = applySurfaceNormalTextureState(resources, shader, state.surfaceNormalTexture, input.disableSurfaceWarp ?? false);
       if (currentTattooState) {
+        const hideFlatFallback = resolveFlatFallbackHidden(currentTattooState, currentSurfaceWarpEnabled);
         applyTattooSpriteState(tattooSprite, currentTattooState, {
-          surfaceWarpEnabled: resolveFlatFallbackHidden(currentTattooState, currentSurfaceWarpEnabled),
+          surfaceWarpEnabled: hideFlatFallback,
         });
       }
 
@@ -256,15 +257,19 @@ export async function createPixiTattooRenderer(
       previousGeometry.destroy();
       drawTattooWarpDebugGrid(tattooWarpDebug, tattooState.warpMesh?.debugLines ?? []);
       applyTattooMeshVisibilityState(tattooMesh, tattooState.transform.opacity);
+      // WHY: TPS mesh 与旧 flat sprite 同时可见时，sprite 可能覆盖已变形网格；有 mesh 或 surface warp 时统一隐藏 fallback。
+      // TRADE-OFF: 失去 flat 预览兜底，但 active warped path 的显示正确性优先。
+      const hideFlatFallback = Boolean(tattooState.warpMesh) || currentSurfaceWarpEnabled;
       applyTattooSpriteState(tattooSprite, tattooState, {
-        surfaceWarpEnabled: resolveFlatFallbackHidden(tattooState, currentSurfaceWarpEnabled),
+        surfaceWarpEnabled: hideFlatFallback,
       });
     },
     setSurfaceNormalTexture(texture) {
       currentSurfaceWarpEnabled = applySurfaceNormalTextureState(resources, shader, texture, input.disableSurfaceWarp ?? false);
       if (currentTattooState) {
+        const hideFlatFallback = Boolean(currentTattooState.warpMesh) || currentSurfaceWarpEnabled;
         applyTattooSpriteState(tattooSprite, currentTattooState, {
-          surfaceWarpEnabled: resolveFlatFallbackHidden(currentTattooState, currentSurfaceWarpEnabled),
+          surfaceWarpEnabled: hideFlatFallback,
         });
       }
     },

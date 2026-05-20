@@ -23,6 +23,7 @@ import {
   tattooProjectionFragmentMain,
   resolveFlatFallbackHidden,
   resolveTattooGeometryMesh,
+  type PixiTattooState,
 } from "../../src/render/pixiRenderer";
 import {
   activeDebugMeshStrokeStyle,
@@ -30,9 +31,48 @@ import {
   drawTattooWarpDebugGrid,
   syncDebugMeshWireframe,
 } from "../../src/render/pixiDebugGeometry";
-import type { SkinMeshData } from "../../src/domain/types";
+import type { SkinMeshData, TattooWarpMeshData } from "../../src/domain/types";
 import { Texture } from "pixi.js";
 import { buildSphereMesh } from "../../src/domain/sphereMesh";
+
+function createTattooSpriteBinding(visible = false) {
+  return {
+    texture: Texture.EMPTY,
+    anchor: { set: vi.fn() },
+    scale: { set: vi.fn() },
+    x: 0,
+    y: 0,
+    rotation: 0,
+    alpha: 0,
+    visible,
+  };
+}
+
+function createTattooWarpMesh(): TattooWarpMeshData {
+  return {
+    positions: new Float32Array([82, 43, 186, 58, 76, 155]),
+    uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+    indices: new Uint32Array([0, 1, 2]),
+    debugLines: [],
+    controlPoints: [],
+    stats: { maxDisplacementPx: 0, meanDisplacementPx: 0 },
+  };
+}
+
+function createTattooState(warpMesh: TattooWarpMeshData | null = null): PixiTattooState {
+  return {
+    texture: { source: { id: "tattoo-texture" } } as unknown as Texture,
+    tattooSize: { width: 220, height: 180 },
+    transform: {
+      x: 402,
+      y: 198,
+      scale: 0.52,
+      rotation: 0.27,
+      opacity: 0.67,
+    },
+    warpMesh,
+  };
+}
 
 describe("createTattooShaderResources", () => {
   test("wraps tattoo uniforms in a Pixi uniform group", () => {
@@ -227,33 +267,12 @@ describe("tattoo sprite visibility fallback", () => {
   });
 
   test("setTattoo path also updates a plain visible Pixi sprite", () => {
-    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
-    const texture = { source } as unknown as Texture;
-    const sprite = {
-      texture: Texture.EMPTY,
-      anchor: { set: vi.fn() },
-      scale: { set: vi.fn() },
-      x: 0,
-      y: 0,
-      rotation: 0,
-      alpha: 0,
-      visible: false,
-    };
+    const state = createTattooState();
+    const sprite = createTattooSpriteBinding();
 
-    applyTattooSpriteState(sprite as never, {
-      texture,
-      tattooSize: { width: 220, height: 180 },
-      transform: {
-        x: 402,
-        y: 198,
-        scale: 0.52,
-        rotation: 0.27,
-        opacity: 0.67,
-      },
-      warpMesh: null,
-    });
+    applyTattooSpriteState(sprite as never, state);
 
-    expect(sprite.texture).toBe(texture);
+    expect(sprite.texture).toBe(state.texture);
     expect(sprite.anchor.set).toHaveBeenCalledWith(0.5);
     expect(sprite.scale.set).toHaveBeenCalledWith(0.52);
     expect(sprite.x).toBe(402);
@@ -264,68 +283,26 @@ describe("tattoo sprite visibility fallback", () => {
   });
 
   test("plain sprite fallback is hidden while surface warp is active so it cannot cover the shader mesh", () => {
-    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
-    const texture = { source } as unknown as Texture;
-    const sprite = {
-      texture: Texture.EMPTY,
-      anchor: { set: vi.fn() },
-      scale: { set: vi.fn() },
-      x: 0,
-      y: 0,
-      rotation: 0,
-      alpha: 0,
-      visible: true,
-    };
+    const sprite = createTattooSpriteBinding(true);
 
-    applyTattooSpriteState(sprite as never, {
-      texture,
-      tattooSize: { width: 220, height: 180 },
-      transform: {
-        x: 402,
-        y: 198,
-        scale: 0.52,
-        rotation: 0.27,
-        opacity: 0.67,
-      },
-      warpMesh: null,
-    }, { surfaceWarpEnabled: true });
+    applyTattooSpriteState(sprite as never, createTattooState(), { surfaceWarpEnabled: true });
+
+    expect(sprite.visible).toBe(false);
+  });
+
+  test("plain sprite fallback is hidden when an active warped tattoo mesh exists", () => {
+    const state = createTattooState(createTattooWarpMesh());
+    const sprite = createTattooSpriteBinding(true);
+
+    expect(resolveFlatFallbackHidden(state, true)).toBe(true);
+    applyTattooSpriteState(sprite as never, state, { surfaceWarpEnabled: true });
 
     expect(sprite.visible).toBe(false);
   });
 
   test("plain sprite fallback is hidden when a warped tattoo mesh exists without surface-normal warp", () => {
-    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
-    const texture = { source } as unknown as Texture;
-    const warpMesh = {
-      positions: new Float32Array([82, 43, 186, 58, 76, 155]),
-      uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
-      indices: new Uint32Array([0, 1, 2]),
-      debugLines: [],
-      controlPoints: [],
-      stats: { maxDisplacementPx: 0, meanDisplacementPx: 0 },
-    };
-    const state = {
-      texture,
-      tattooSize: { width: 220, height: 180 },
-      transform: {
-        x: 402,
-        y: 198,
-        scale: 0.52,
-        rotation: 0.27,
-        opacity: 0.67,
-      },
-      warpMesh,
-    };
-    const sprite = {
-      texture: Texture.EMPTY,
-      anchor: { set: vi.fn() },
-      scale: { set: vi.fn() },
-      x: 0,
-      y: 0,
-      rotation: 0,
-      alpha: 0,
-      visible: true,
-    };
+    const state = createTattooState(createTattooWarpMesh());
+    const sprite = createTattooSpriteBinding(true);
 
     expect(resolveFlatFallbackHidden(state, false)).toBe(true);
     applyTattooSpriteState(sprite as never, state, { surfaceWarpEnabled: false });
@@ -334,19 +311,7 @@ describe("tattoo sprite visibility fallback", () => {
   });
 
   test("plain sprite fallback stays available for flat tattoo state without mesh warp or surface warp", () => {
-    const texture = { source: { id: "tattoo-texture" } } as unknown as Texture;
-    const state = {
-      texture,
-      tattooSize: { width: 220, height: 180 },
-      transform: {
-        x: 402,
-        y: 198,
-        scale: 0.52,
-        rotation: 0.27,
-        opacity: 0.67,
-      },
-      warpMesh: null,
-    };
+    const state = createTattooState();
 
     expect(resolveFlatFallbackHidden(state, false)).toBe(false);
   });
