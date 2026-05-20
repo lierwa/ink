@@ -135,6 +135,23 @@ export interface SkinMeshData {
   boundaryFlags?: Uint8Array;
 }
 
+export interface TattooWarpDebugLine {
+  source: Point;
+  destination: Point;
+}
+
+export interface TattooWarpMeshData {
+  positions: Float32Array;
+  uvs: Float32Array;
+  indices: Uint32Array;
+  debugLines: TattooWarpDebugLine[];
+  controlPoints: Array<{ source: Point; destination: Point }>;
+  stats: {
+    maxDisplacementPx: number;
+    meanDisplacementPx: number;
+  };
+}
+
 export interface SurfaceFieldData {
   width: number;
   height: number;
