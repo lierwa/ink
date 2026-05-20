@@ -3,6 +3,7 @@ import type {
   BodySurfaceAnalysisDebugState,
   Point,
   Size,
+  SkinMeshData,
   TattooTransform,
   TattooWarpDebugLine,
   TattooWarpMeshData,
@@ -12,6 +13,7 @@ export interface TattooWarpMeshInput {
   tattooSize: Size;
   transform: TattooTransform;
   surface: BodySurfaceAnalysisDebugState | null;
+  bodyMesh?: SkinMeshData;
   columns?: number;
   rows?: number;
 }
@@ -38,6 +40,14 @@ export function buildTattooWarpMesh(input: TattooWarpMeshInput): TattooWarpMeshD
   const rows = clampInteger(input.rows ?? 32, 2, 96);
   const controlPoints = buildControlPoints(input.tattooSize, input.transform, basis);
   const transformer = createThinPlateSplineTransformer(controlPoints);
+  const bodyPatchMesh = input.bodyMesh
+    ? buildBodyPatchWarpMesh({ ...input, bodyMesh: input.bodyMesh }, controlPoints, createInverseTransformer(controlPoints))
+    : null;
+
+  if (bodyPatchMesh) {
+    return bodyPatchMesh;
+  }
+
   const vertexCount = (columns + 1) * (rows + 1);
   const positions = new Float32Array(vertexCount * 2);
   const uvs = new Float32Array(vertexCount * 2);
@@ -51,6 +61,203 @@ export function buildTattooWarpMesh(input: TattooWarpMeshInput): TattooWarpMeshD
     controlPoints,
     stats,
   };
+}
+
+function createInverseTransformer(controlPoints: TpsControlPoint[]): ReturnType<typeof createThinPlateSplineTransformer> {
+  return createThinPlateSplineTransformer(controlPoints.map((point) => ({
+    source: point.destination,
+    destination: point.source,
+  })));
+}
+
+function buildBodyPatchWarpMesh(
+  input: TattooWarpMeshInput & { bodyMesh: SkinMeshData },
+  controlPoints: TpsControlPoint[],
+  inverseTransformer: ReturnType<typeof createThinPlateSplineTransformer>,
+): TattooWarpMeshData | null {
+  const patch = selectBodyPatchTriangles(input.bodyMesh, getTattooStageBounds(input.tattooSize, input.transform));
+  if (!patch) {
+    return null;
+  }
+
+  const uvs = new Float32Array(patch.positions.length);
+  let maxDisplacementPx = 0;
+  let totalDisplacementPx = 0;
+
+  for (let index = 0; index < patch.positions.length; index += 2) {
+    const stagePoint = { x: patch.positions[index], y: patch.positions[index + 1] };
+    const source = inverseTransformer.transform(stagePoint);
+    const flat = mapTattooSourceToStage(source, input.tattooSize, input.transform);
+    const displacement = Math.hypot(stagePoint.x - flat.x, stagePoint.y - flat.y);
+    uvs[index] = source.x / Math.max(input.tattooSize.width, 1);
+    uvs[index + 1] = source.y / Math.max(input.tattooSize.height, 1);
+    maxDisplacementPx = Math.max(maxDisplacementPx, displacement);
+    totalDisplacementPx += displacement;
+  }
+
+  // WHY: 真正贴附时 geometry 应来自 body 局部三角 patch，tattoo 只通过 UV 采样；
+  // TRADE-OFF: patch 边缘 UV 可能略超出 0..1，交给 shader 丢弃可避免复制/裁剪 body 三角形。
+  return {
+    positions: patch.positions,
+    uvs,
+    indices: patch.indices,
+    debugLines: buildBodyPatchDebugLines(patch.positions, patch.indices),
+    controlPoints,
+    stats: {
+      maxDisplacementPx,
+      meanDisplacementPx: totalDisplacementPx / Math.max(1, patch.positions.length / 2),
+    },
+  };
+}
+
+function selectBodyPatchTriangles(mesh: SkinMeshData, bounds: { minX: number; minY: number; maxX: number; maxY: number }): SkinMeshData | null {
+  const vertexMap = new Map<number, number>();
+  const positions: number[] = [];
+  const indices: number[] = [];
+
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]] as const;
+    if (!triangleIntersectsBounds(mesh.positions, triangle, bounds)) {
+      continue;
+    }
+
+    for (const sourceIndex of triangle) {
+      const mapped = getOrAddPatchVertex(sourceIndex, mesh.positions, vertexMap, positions);
+      indices.push(mapped);
+    }
+  }
+
+  if (positions.length < 6 || indices.length < 3) {
+    return null;
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  };
+}
+
+function getOrAddPatchVertex(
+  sourceIndex: number,
+  sourcePositions: Float32Array,
+  vertexMap: Map<number, number>,
+  positions: number[],
+): number {
+  const existing = vertexMap.get(sourceIndex);
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const nextIndex = positions.length / 2;
+  vertexMap.set(sourceIndex, nextIndex);
+  positions.push(sourcePositions[sourceIndex * 2], sourcePositions[sourceIndex * 2 + 1]);
+  return nextIndex;
+}
+
+function getTattooStageBounds(tattooSize: Size, transform: TattooTransform): { minX: number; minY: number; maxX: number; maxY: number } {
+  const corners = [
+    mapTattooSourceToStage({ x: 0, y: 0 }, tattooSize, transform),
+    mapTattooSourceToStage({ x: tattooSize.width, y: 0 }, tattooSize, transform),
+    mapTattooSourceToStage({ x: tattooSize.width, y: tattooSize.height }, tattooSize, transform),
+    mapTattooSourceToStage({ x: 0, y: tattooSize.height }, tattooSize, transform),
+  ];
+
+  return {
+    minX: Math.min(...corners.map((point) => point.x)),
+    minY: Math.min(...corners.map((point) => point.y)),
+    maxX: Math.max(...corners.map((point) => point.x)),
+    maxY: Math.max(...corners.map((point) => point.y)),
+  };
+}
+
+function triangleIntersectsBounds(
+  positions: Float32Array,
+  triangle: readonly [number, number, number],
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+  const points = triangle.map((vertexIndex) => ({
+    x: positions[vertexIndex * 2],
+    y: positions[vertexIndex * 2 + 1],
+  }));
+
+  return points.some((point) => pointInsideBounds(point, bounds)) ||
+    rectCorners(bounds).some((point) => pointInTriangle(point, points[0], points[1], points[2])) ||
+    triangleEdges(points).some(([start, end]) => rectEdges(bounds).some(([rectStart, rectEnd]) => segmentsIntersect(start, end, rectStart, rectEnd)));
+}
+
+function pointInsideBounds(point: Point, bounds: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+  return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+}
+
+function rectCorners(bounds: { minX: number; minY: number; maxX: number; maxY: number }): Point[] {
+  return [
+    { x: bounds.minX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.maxY },
+    { x: bounds.minX, y: bounds.maxY },
+  ];
+}
+
+function triangleEdges(points: Point[]): Array<[Point, Point]> {
+  return [[points[0], points[1]], [points[1], points[2]], [points[2], points[0]]];
+}
+
+function rectEdges(bounds: { minX: number; minY: number; maxX: number; maxY: number }): Array<[Point, Point]> {
+  const corners = rectCorners(bounds);
+  return [[corners[0], corners[1]], [corners[1], corners[2]], [corners[2], corners[3]], [corners[3], corners[0]]];
+}
+
+function pointInTriangle(point: Point, a: Point, b: Point, c: Point): boolean {
+  const area = cross(a, b, c);
+  const first = cross(point, a, b);
+  const second = cross(point, b, c);
+  const third = cross(point, c, a);
+  return area >= 0
+    ? first >= 0 && second >= 0 && third >= 0
+    : first <= 0 && second <= 0 && third <= 0;
+}
+
+function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
+  const abC = cross(a, b, c);
+  const abD = cross(a, b, d);
+  const cdA = cross(c, d, a);
+  const cdB = cross(c, d, b);
+
+  if (abC === 0 && pointOnSegment(c, a, b)) return true;
+  if (abD === 0 && pointOnSegment(d, a, b)) return true;
+  if (cdA === 0 && pointOnSegment(a, c, d)) return true;
+  if (cdB === 0 && pointOnSegment(b, c, d)) return true;
+
+  return (abC > 0) !== (abD > 0) && (cdA > 0) !== (cdB > 0);
+}
+
+function pointOnSegment(point: Point, start: Point, end: Point): boolean {
+  return point.x >= Math.min(start.x, end.x) &&
+    point.x <= Math.max(start.x, end.x) &&
+    point.y >= Math.min(start.y, end.y) &&
+    point.y <= Math.max(start.y, end.y);
+}
+
+function cross(a: Point, b: Point, c: Point): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function buildBodyPatchDebugLines(positions: Float32Array, indices: Uint32Array): TattooWarpDebugLine[] {
+  const lines: TattooWarpDebugLine[] = [];
+
+  for (let index = 0; index < indices.length; index += 3) {
+    pushStageDebugSegment(lines, positions, indices[index], indices[index + 1]);
+    pushStageDebugSegment(lines, positions, indices[index + 1], indices[index + 2]);
+    pushStageDebugSegment(lines, positions, indices[index + 2], indices[index]);
+  }
+
+  return lines;
+}
+
+function pushStageDebugSegment(lines: TattooWarpDebugLine[], positions: Float32Array, startIndex: number, endIndex: number): void {
+  const start = { x: positions[startIndex * 2], y: positions[startIndex * 2 + 1] };
+  const end = { x: positions[endIndex * 2], y: positions[endIndex * 2 + 1] };
+  lines.push({ source: start, destination: start }, { source: end, destination: end });
 }
 
 export function mapTattooSourceToStage(source: Point, tattooSize: Size, transform: TattooTransform): Point {

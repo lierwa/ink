@@ -412,6 +412,7 @@ function refreshLocalSurface(
     tattooSize: state.tattooAsset.size,
     transform: state.tattooTransform,
     surface: localSurface.debug.source === "local-mesh" ? localSurface.debug : null,
+    bodyMesh: state.bodySurfaceState.mesh,
   });
   refreshSurfaceStatus(state, elements);
 }

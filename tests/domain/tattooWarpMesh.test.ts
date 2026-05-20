@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildTattooWarpMesh, mapTattooSourceToStage } from "../../src/domain/tattooWarpMesh";
-import type { BodySurfaceAnalysisDebugState, TattooTransform } from "../../src/domain/types";
+import type { BodySurfaceAnalysisDebugState, SkinMeshData, TattooTransform } from "../../src/domain/types";
 
 const transform: TattooTransform = {
   x: 240,
@@ -26,6 +26,45 @@ const surface: BodySurfaceAnalysisDebugState = {
 };
 
 describe("buildTattooWarpMesh", () => {
+  test("uses body mesh patch triangles as tattoo render geometry", () => {
+    const bodyMesh: SkinMeshData = {
+      positions: new Float32Array([
+        190, 150,
+        290, 150,
+        290, 210,
+        190, 210,
+        520, 520,
+        580, 520,
+        580, 580,
+      ]),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6]),
+      boundaryFlags: new Uint8Array([0, 0, 0, 0, 0, 0, 0]),
+    };
+
+    const mesh = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      bodyMesh,
+      columns: 8,
+      rows: 6,
+    });
+
+    expect(mesh).not.toBeNull();
+    if (!mesh) {
+      throw new Error("Expected body-patch tattoo warp mesh.");
+    }
+
+    expect(mesh.positions).toEqual(new Float32Array([
+      190, 150,
+      290, 150,
+      290, 210,
+      190, 210,
+    ]));
+    expect(mesh.indices).toEqual(new Uint32Array([0, 1, 2, 0, 2, 3]));
+    expect(mesh.positions.length).not.toBe((8 + 1) * (6 + 1) * 2);
+  });
+
   test("builds a subdivided mesh with tattoo uvs and triangle indices", () => {
     const mesh = buildTattooWarpMesh({
       tattooSize: { width: 200, height: 120 },
