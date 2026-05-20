@@ -18,7 +18,7 @@ import type { BodyMeshPipelineParams, SkinMeshData, TattooWarpMeshData } from ".
 import { defaultBodyMeshPipelineParams } from "../src/domain/skinMeshPipeline";
 
 describe("createAppMarkup", () => {
-  test("renders body edit remove controls and shading assist toggle", () => {
+  test("renders body edit remove controls, shading assist toggle, and warp strength slider", () => {
     const host = document.createElement("div");
 
     host.innerHTML = createAppMarkup({
@@ -32,12 +32,12 @@ describe("createAppMarkup", () => {
     expect(host.querySelector("#editBody")).toBeInstanceOf(HTMLButtonElement);
     expect(host.querySelector("#removeBody")).toBeInstanceOf(HTMLButtonElement);
     expect(host.querySelector("#shadingGeometryAssist")).toBeInstanceOf(HTMLInputElement);
+    expect(host.querySelector("#warpStrength")).toBeInstanceOf(HTMLInputElement);
+    expect(host.querySelector("#warpStrengthValue")?.textContent).toBe("1.00");
     expect(host.querySelector("#bodyUploadStatus")?.textContent).toBe("No body uploaded");
     expect(host.querySelector("#tattooUploadStatus")?.textContent).toBe("No tattoo uploaded");
     expect(host.textContent).toContain("光影曲面辅助");
-    expect(host.querySelector("#surfaceFitStrength")).toBeNull();
-    expect(host.querySelector("#surfaceFitStrengthValue")).toBeNull();
-    expect(host.textContent).not.toContain("Fit strength");
+    expect(host.textContent).toContain("Warp strength");
   });
 });
 
@@ -132,7 +132,7 @@ describe("refreshTattooWarpAndRenderTattoo", () => {
 });
 
 describe("refreshLocalSurfaceForTattooRender", () => {
-  test("rebuilds TPS warp before Pixi receives tattoo state", () => {
+  test("rebuilds body-patch warp before Pixi receives tattoo state", () => {
     const contextSpy = installCanvasContextStub();
     const statusLabel = document.createElement("div");
     const state = createRefreshIntegrationState();
@@ -150,13 +150,65 @@ describe("refreshLocalSurfaceForTattooRender", () => {
 
     expect(state.tattooWarpMesh).not.toBeNull();
     expect(state.tattooWarpMesh?.stats.maxDisplacementPx).toBeGreaterThan(10);
-    expect(state.tattooWarpMesh?.positions.length).toBeLessThan(100);
+    // WHY: app 集成路径必须把 body mesh patch 交给 Pixi；如果这里还是 24x32 规则网格，就会回到与身体点无关的假弯曲。
+    // TRADE-OFF: body patch 可能因 tattoo 边界裁剪产生插值点，所以只断言它小于 fallback 规则网格且仍有有效 UV。
+    expect(state.tattooWarpMesh?.positions.length).toBeLessThan((24 + 1) * (32 + 1) * 2);
+    expect(state.tattooWarpMesh?.indices.length).toBeGreaterThan(0);
     expect(Math.min(...Array.from(state.tattooWarpMesh?.uvs ?? []))).toBeGreaterThanOrEqual(0);
     expect(Math.max(...Array.from(state.tattooWarpMesh?.uvs ?? []))).toBeLessThanOrEqual(1);
     expect(pixi.setTattoo).toHaveBeenCalledWith(expect.objectContaining({
       warpMesh: state.tattooWarpMesh,
     }));
     expect(statusLabel.textContent).toContain("TPS warp");
+  });
+
+  test("uses warp strength to control visible TPS displacement", () => {
+    const contextSpy = installCanvasContextStub();
+    const statusLabel = document.createElement("div");
+    const weakState = createRefreshIntegrationState();
+    const strongState = createRefreshIntegrationState();
+    weakState.warpStrength = 0;
+    strongState.warpStrength = 2;
+    const pixi = {
+      setSurfaceNormalTexture: vi.fn(),
+      setTattoo: vi.fn(),
+      clearTattoo: vi.fn(),
+    };
+
+    try {
+      refreshLocalSurfaceForTattooRender(weakState, { statusLabel }, pixi);
+      refreshLocalSurfaceForTattooRender(strongState, { statusLabel }, pixi);
+    } finally {
+      contextSpy.mockRestore();
+    }
+
+    expect(weakState.tattooWarpMesh?.stats.maxDisplacementPx).toBeLessThan(1);
+    expect(strongState.tattooWarpMesh?.stats.maxDisplacementPx).toBeGreaterThan(20);
+  });
+
+  test("attaches diagnostics snapshot to rebuilt tattoo warp mesh", () => {
+    const contextSpy = installCanvasContextStub();
+    const statusLabel = document.createElement("div");
+    const state = createRefreshIntegrationState();
+    const pixi = {
+      setSurfaceNormalTexture: vi.fn(),
+      setTattoo: vi.fn(),
+      clearTattoo: vi.fn(),
+    };
+
+    try {
+      refreshLocalSurfaceForTattooRender(state, { statusLabel }, pixi);
+    } finally {
+      contextSpy.mockRestore();
+    }
+
+    expect(state.tattooWarpMesh?.diagnostics).toMatchObject({
+      mode: "body-patch",
+      bodyMeshQuality: expect.any(Object),
+      patchSelection: expect.any(Object),
+      inverseMapping: expect.any(Object),
+      distortion: expect.any(Object),
+    });
   });
 });
 
@@ -262,6 +314,7 @@ function createRefreshIntegrationState() {
     tattooWarpMesh: null as TattooWarpMeshData | null,
     transformRevision: 0,
     shadingGeometryAssistEnabled: false,
+    warpStrength: 1,
     bodySurfaceState: {
       texture: Texture.EMPTY,
       sourceCanvas,
@@ -302,6 +355,8 @@ function createTransformSetterElements(statusLabel: HTMLElement) {
     paramRotation: document.createElement("input"),
     paramOpacity: document.createElement("input"),
     opacityInput: document.createElement("input"),
+    warpStrengthInput: document.createElement("input"),
+    warpStrengthValue: document.createElement("span"),
     statusLabel,
   } as never;
 }

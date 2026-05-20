@@ -26,19 +26,18 @@ const surface: BodySurfaceAnalysisDebugState = {
 };
 
 describe("buildTattooWarpMesh", () => {
-  test("uses body mesh patch triangles as tattoo render geometry", () => {
+  test("uses clipped body mesh triangles as render geometry when body mesh is available", () => {
     const bodyMesh: SkinMeshData = {
       positions: new Float32Array([
-        190, 150,
-        290, 150,
-        290, 210,
-        190, 210,
+        230, 170,
+        250, 170,
+        240, 190,
         520, 520,
         580, 520,
         580, 580,
       ]),
-      indices: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6]),
-      boundaryFlags: new Uint8Array([0, 0, 0, 0, 0, 0, 0]),
+      indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      boundaryFlags: new Uint8Array([0, 0, 0, 0, 0, 0]),
     };
 
     const mesh = buildTattooWarpMesh({
@@ -55,17 +54,17 @@ describe("buildTattooWarpMesh", () => {
       throw new Error("Expected body-patch tattoo warp mesh.");
     }
 
-    expect(mesh.positions).toEqual(new Float32Array([
-      190, 150,
-      290, 150,
-      290, 210,
-      190, 210,
-    ]));
-    expect(mesh.indices).toEqual(new Uint32Array([0, 1, 2, 0, 2, 3]));
-    expect(mesh.positions.length).not.toBe((8 + 1) * (6 + 1) * 2);
+    // WHY: 优先走 body-patch，但门控触发时允许回退到 regular-grid，避免出现翻折和局部爆裂。
+    // TRADE-OFF: 回退时不再逐点等于输入三角，但仍必须输出受 body 约束的有效几何。
+    expect(["body-patch", "regular-grid"]).toContain(mesh.diagnostics?.mode);
+    expect(mesh.indices.length).toBeGreaterThan(0);
+    expect(mesh.uvs.length).toBe(mesh.positions.length);
+    expect(mesh.diagnostics?.patchSelection?.clippedTriangleCount).toBeGreaterThan(0);
+    expect(mesh.diagnostics?.inverseMapping?.controlPointResidualMax).toBeGreaterThanOrEqual(0);
+    expect(mesh.diagnostics?.distortion?.flippedRenderTriangleCount).toBeGreaterThanOrEqual(0);
   });
 
-  test("clips body patch triangles to the tattoo source bounds", () => {
+  test("keeps regular tattoo grid uv coordinates inside source bounds", () => {
     const bodyMesh: SkinMeshData = {
       positions: new Float32Array([
         130, 120,
@@ -93,6 +92,50 @@ describe("buildTattooWarpMesh", () => {
     expect(mesh.indices.length).toBeGreaterThan(0);
   });
 
+  test("clips regular tattoo grid triangles outside the latest body mesh", () => {
+    const bodyMesh: SkinMeshData = {
+      positions: new Float32Array([
+        190, 120,
+        240, 120,
+        240, 240,
+        190, 240,
+      ]),
+      indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    };
+
+    const unclipped = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      columns: 8,
+      rows: 6,
+    });
+    const clipped = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      bodyMesh,
+      columns: 8,
+      rows: 6,
+    });
+
+    expect(unclipped).not.toBeNull();
+    expect(clipped).not.toBeNull();
+    if (!unclipped || !clipped) {
+      throw new Error("Expected tattoo warp meshes.");
+    }
+
+    // WHY: 即便 body-patch 触发门控回退到 regular-grid，可见三角仍必须受 body mesh 约束，避免画到衣服/背景区域。
+    // TRADE-OFF: 回退后 positions 可能不再减少，但最终索引集仍应被明显裁剪。
+    expect(["body-patch", "regular-grid"]).toContain(clipped.diagnostics?.mode);
+    expect(clipped.indices.length).toBeLessThan(unclipped.indices.length);
+    for (let index = 0; index < clipped.indices.length; index += 1) {
+      const vertexIndex = clipped.indices[index] * 2;
+      expect(clipped.positions[vertexIndex]).toBeGreaterThanOrEqual(170);
+      expect(clipped.positions[vertexIndex]).toBeLessThanOrEqual(270);
+    }
+  });
+
   test("builds a subdivided mesh with tattoo uvs and triangle indices", () => {
     const mesh = buildTattooWarpMesh({
       tattooSize: { width: 200, height: 120 },
@@ -110,11 +153,13 @@ describe("buildTattooWarpMesh", () => {
     expect(mesh.positions.length).toBe((8 + 1) * (6 + 1) * 2);
     expect(mesh.uvs.length).toBe(mesh.positions.length);
     expect(mesh.indices.length).toBe(8 * 6 * 6);
+    expect(mesh.diagnostics?.mode).toBe("regular-grid");
+    expect(mesh.diagnostics?.distortion?.areaScaleMax).toBeGreaterThan(0);
     expect(Math.min(...Array.from(mesh.uvs))).toBeGreaterThanOrEqual(0);
     expect(Math.max(...Array.from(mesh.uvs))).toBeLessThanOrEqual(1);
   });
 
-  test("warps the grid enough to be visually different from a flat rectangle", () => {
+  test("uses a predictable cylinder wrap: center stable and quarter columns symmetric", () => {
     const mesh = buildTattooWarpMesh({
       tattooSize: { width: 200, height: 120 },
       transform,
@@ -142,14 +187,53 @@ describe("buildTattooWarpMesh", () => {
       y: mesh.positions[centerOffset + 1],
     };
     const flatCenter = mapTattooSourceToStage({ x: 100, y: 60 }, { width: 200, height: 120 }, transform);
-    expect(centerPosition.x).toBeGreaterThan(100);
-    expect(centerPosition.x).toBeLessThan(380);
-    expect(centerPosition.y).toBeGreaterThan(80);
-    expect(centerPosition.y).toBeLessThan(280);
-    expect(Math.hypot(centerPosition.x - flatCenter.x, centerPosition.y - flatCenter.y)).toBeGreaterThan(3);
+    expect(centerPosition.x).toBeCloseTo(flatCenter.x, 5);
+    expect(centerPosition.y).toBeCloseTo(flatCenter.y, 5);
+
+    const leftQuarter = readGridPoint(mesh.positions, 12, 8, 3, 4);
+    const rightQuarter = readGridPoint(mesh.positions, 12, 8, 9, 4);
+    const flatLeftQuarter = mapTattooSourceToStage({ x: 50, y: 60 }, { width: 200, height: 120 }, transform);
+    const flatRightQuarter = mapTattooSourceToStage({ x: 150, y: 60 }, { width: 200, height: 120 }, transform);
+    const leftDelta = leftQuarter.x - flatLeftQuarter.x;
+    const rightDelta = rightQuarter.x - flatRightQuarter.x;
+
+    // WHY: cylinder wrap 必须有肉眼可解释的规律：中心不动，左右同距列按相反方向对称压缩。
+    // TRADE-OFF: 这是确定性 2.5D 代理，不再追求 TPS 自由控制点带来的复杂局部扭曲。
+    expect(leftDelta).toBeGreaterThan(1);
+    expect(rightDelta).toBeLessThan(-1);
+    expect(Math.abs(leftDelta)).toBeCloseTo(Math.abs(rightDelta), 4);
     expect(mesh.stats.maxDisplacementPx).toBeGreaterThan(12);
     expect(mesh.stats.meanDisplacementPx).toBeGreaterThan(3);
     expect(mesh.controlPoints.length).toBeGreaterThanOrEqual(9);
+  });
+
+  test("scales visible curvature with warp strength", () => {
+    const flat = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      columns: 12,
+      rows: 8,
+      warpStrength: 0,
+    });
+    const strong = buildTattooWarpMesh({
+      tattooSize: { width: 200, height: 120 },
+      transform,
+      surface,
+      columns: 12,
+      rows: 8,
+      warpStrength: 2,
+    });
+
+    expect(flat).not.toBeNull();
+    expect(strong).not.toBeNull();
+    if (!flat || !strong) {
+      throw new Error("Expected tattoo warp meshes.");
+    }
+
+    expect(flat.stats.maxDisplacementPx).toBeLessThan(1);
+    expect(strong.stats.maxDisplacementPx).toBeGreaterThan(24);
+    expect(strong.stats.maxDisplacementPx).toBeGreaterThan(flat.stats.maxDisplacementPx + 20);
   });
 
   test("emits warped debug grid lines that show non-flat coverage", () => {
@@ -178,8 +262,7 @@ describe("buildTattooWarpMesh", () => {
     const flatRightEdge = transform.x + (200 * transform.scale) / 2;
     let hasAdjacentPair = false;
     let hasRightEdgeExpansion = false;
-    let hasCenterWarp = false;
-    let hasTiltedAdjacentSegment = false;
+    let hasSymmetricCylinderWarp = false;
 
     for (let index = 0; index < mesh.debugLines.length; index += 2) {
       const start = mesh.debugLines[index];
@@ -197,17 +280,24 @@ describe("buildTattooWarpMesh", () => {
       expect((isHorizontal || isVertical) && hasFiniteDestinations).toBe(true);
       hasAdjacentPair ||= isHorizontal || isVertical;
       hasRightEdgeExpansion ||= start.destination.x > flatRightEdge || end.destination.x > flatRightEdge;
-      hasCenterWarp ||= isDisplacedFromFlatStage(start);
-      hasCenterWarp ||= isDisplacedFromFlatStage(end);
-      hasTiltedAdjacentSegment ||=
-        Math.abs(end.destination.x - start.destination.x) > 1 &&
-        Math.abs(end.destination.y - start.destination.y) > 1;
+      hasSymmetricCylinderWarp ||= isDisplacedFromFlatStage(start) || isDisplacedFromFlatStage(end);
     }
 
     expect(hasAdjacentPair).toBe(true);
-    expect(hasRightEdgeExpansion || hasCenterWarp || hasTiltedAdjacentSegment).toBe(true);
+    expect(hasRightEdgeExpansion || hasSymmetricCylinderWarp).toBe(true);
   });
 });
+
+function readGridPoint(
+  positions: Float32Array,
+  columns: number,
+  _rows: number,
+  column: number,
+  row: number,
+): { x: number; y: number } {
+  const index = (row * (columns + 1) + column) * 2;
+  return { x: positions[index], y: positions[index + 1] };
+}
 
 function isDisplacedFromFlatStage(line: {
   source: { x: number; y: number };

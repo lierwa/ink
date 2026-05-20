@@ -11,6 +11,7 @@ import {
   applyTattooSpriteState,
   clearTattooSpriteState,
   applyTattooMeshVisibilityState,
+  applyTattooMeshTextureState,
   createSkinMaskAlphaPixels,
   createTattooShaderResources,
   clearTattooRenderState,
@@ -264,6 +265,15 @@ describe("tattoo sprite visibility fallback", () => {
 
     applyTattooMeshVisibilityState(mesh, 0);
     expect(mesh.visible).toBe(false);
+  });
+
+  test("setTattoo path binds tattoo texture directly to the visible warped mesh", () => {
+    const state = createTattooState(createTattooWarpMesh());
+    const mesh = { texture: Texture.EMPTY };
+
+    applyTattooMeshTextureState(mesh, state);
+
+    expect(mesh.texture).toBe(state.texture);
   });
 
   test("setTattoo path also updates a plain visible Pixi sprite", () => {

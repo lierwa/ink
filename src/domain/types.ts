@@ -150,6 +150,45 @@ export interface TattooWarpMeshData {
     maxDisplacementPx: number;
     meanDisplacementPx: number;
   };
+  diagnostics?: TattooWarpDiagnostics;
+}
+
+export interface TattooWarpDiagnostics {
+  mode: "body-patch" | "regular-grid";
+  bodyMeshQuality?: {
+    localVertexCount: number;
+    localTriangleCount: number;
+    triangleAreaMin: number;
+    triangleAreaMean: number;
+    triangleAreaMax: number;
+    badAspectTriangleRatio: number;
+    boundaryVertexRatio: number;
+  };
+  patchSelection?: {
+    sourceTriangleCount: number;
+    clippedTriangleCount: number;
+    clippedVertexCount: number;
+    generatedBoundaryVertexCount: number;
+    filteredTriangleCount?: number;
+    stageAreaBefore: number;
+    stageAreaAfter: number;
+    sourceAreaCoverageRatio: number;
+  };
+  inverseMapping?: {
+    controlPointResidualMax: number;
+    controlPointResidualMean: number;
+    sourceOutOfBoundsRatio: number;
+    sourceFlipTriangleCount: number;
+    sourceDegenerateTriangleCount: number;
+  };
+  distortion?: {
+    areaScaleMin: number;
+    areaScaleMean: number;
+    areaScaleMax: number;
+    maxStretchRatio: number;
+    maxCompressionRatio: number;
+    flippedRenderTriangleCount: number;
+  };
 }
 
 export interface SurfaceFieldData {

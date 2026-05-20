@@ -65,6 +65,10 @@ export function createAppMarkup(
               <input id="shadingGeometryAssist" type="checkbox" />
               <span>光影曲面辅助</span>
             </label>
+            <label>
+              <span>Warp strength <output id="warpStrengthValue">1.00</output></span>
+              <input id="warpStrength" type="range" min="0" max="2" step="0.01" value="1" />
+            </label>
           </div>
 
           <div class="control-group param-grid">

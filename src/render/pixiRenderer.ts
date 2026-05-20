@@ -166,7 +166,7 @@ export async function createPixiTattooRenderer(
   const shader = createTattooShader(resources);
   const tattooMesh = new Mesh({
     geometry: createMeshGeometry(activeProjectionMesh, input.stageSize),
-    shader,
+    texture: Texture.EMPTY,
   });
 
   app.stage.sortableChildren = true;
@@ -247,6 +247,7 @@ export async function createPixiTattooRenderer(
       const tattooState = normalizeTattooState(state);
       currentTattooState = tattooState;
       applyTattooState(resources, shader, tattooState);
+      applyTattooMeshTextureState(tattooMesh, tattooState);
       const previousGeometry = tattooMesh.geometry;
       // WHY: TPS 已经把 tattoo local grid 烘焙成 stage positions + tattoo UV，shader 只应采样 mesh UV，避免再用 flat transform 二次变形。
       // TRADE-OFF: 每次 tattoo 状态更新会替换 geometry，但当前交互频率低于逐帧动画，换取渲染路径职责清晰。
@@ -386,6 +387,13 @@ export function applyTattooMeshVisibilityState(
   opacity: number,
 ): void {
   mesh.visible = opacity > 0;
+}
+
+export function applyTattooMeshTextureState(
+  mesh: { texture: Texture },
+  state: Pick<PixiTattooState, "texture">,
+): void {
+  mesh.texture = state.texture;
 }
 
 export function clearTattooSpriteState(

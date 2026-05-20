@@ -84,6 +84,7 @@ interface AppState {
   tattooWarpMesh: TattooWarpMeshData | null;
   transformRevision: number;
   shadingGeometryAssistEnabled: boolean;
+  warpStrength: number;
   bodySurfaceState: BodySurfaceState;
 }
 
@@ -95,6 +96,7 @@ interface TattooRenderStateInput {
 
 interface SurfaceStatusElements {
   statusLabel: HTMLElement;
+  debugMeshInput?: HTMLInputElement;
 }
 
 type TattooSurfaceRefreshRenderer = Pick<
@@ -117,6 +119,8 @@ interface AppElements {
   removeTattooButton: HTMLButtonElement;
   debugMeshInput: HTMLInputElement;
   shadingGeometryAssistInput: HTMLInputElement;
+  warpStrengthInput: HTMLInputElement;
+  warpStrengthValue: HTMLOutputElement;
   opacityInput: HTMLInputElement;
   paramX: HTMLInputElement;
   paramY: HTMLInputElement;
@@ -247,6 +251,8 @@ function getAppElements(): AppElements {
     removeTattooButton: getElement<HTMLButtonElement>("removeTattoo"),
     debugMeshInput: getElement<HTMLInputElement>("debugMesh"),
     shadingGeometryAssistInput: getElement<HTMLInputElement>("shadingGeometryAssist"),
+    warpStrengthInput: getElement<HTMLInputElement>("warpStrength"),
+    warpStrengthValue: getElement<HTMLOutputElement>("warpStrengthValue"),
     opacityInput: getElement<HTMLInputElement>("opacity"),
     paramX: getElement<HTMLInputElement>("paramX"),
     paramY: getElement<HTMLInputElement>("paramY"),
@@ -271,6 +277,7 @@ function initializeAppState(
     tattooWarpMesh: null,
     transformRevision: 0,
     shadingGeometryAssistEnabled: false,
+    warpStrength: 1,
     bodySurfaceState: {
       texture: Texture.from(defaultBodyCanvas),
       sourceCanvas: defaultBodyCanvas,
@@ -357,6 +364,13 @@ function installTransformControls(
     // TRADE-OFF: 开关时多一次 tattoo state 提交，但避免 shader/geometry 继续使用旧 warpMesh。
     refreshLocalSurfaceForTattooRender(state, elements, pixi);
   });
+  elements.warpStrengthInput.addEventListener("input", () => {
+    state.warpStrength = clamp(Number(elements.warpStrengthInput.value), 0, 2);
+    elements.warpStrengthValue.textContent = state.warpStrength.toFixed(2);
+    // WHY: warp strength 是 tattoo 自身规则 TPS 网格的调试/控制参数，改动后必须立即重建几何。
+    // TRADE-OFF: slider 拖动会同步重算 TPS，但网格规模固定且反馈优先于延迟刷新。
+    refreshLocalSurfaceForTattooRender(state, elements, pixi);
+  });
 
   for (const input of [elements.paramX, elements.paramY, elements.paramScale, elements.paramRotation]) {
     input.addEventListener("input", applyPanelTransform);
@@ -413,7 +427,9 @@ function refreshLocalSurface(
     transform: state.tattooTransform,
     surface: localSurface.debug.source === "local-mesh" ? localSurface.debug : null,
     bodyMesh: state.bodySurfaceState.mesh,
+    warpStrength: state.warpStrength,
   });
+  emitWarpDiagnosticsIfNeeded(state.tattooWarpMesh, elements);
   refreshSurfaceStatus(state, elements);
 }
 
@@ -498,6 +514,20 @@ function refreshSurfaceStatus(state: AppState, elements: SurfaceStatusElements):
   elements.statusLabel.textContent = `${formatLocalSurfaceStatus(debug)}${formatTpsWarpStatusSuffix(state.tattooWarpMesh)}`;
 }
 
+function emitWarpDiagnosticsIfNeeded(mesh: TattooWarpMeshData | null, elements: SurfaceStatusElements): void {
+  if (!elements.debugMeshInput?.checked) {
+    return;
+  }
+  if (!mesh) {
+    console.info("[tattoo-warp diagnostics]", { status: "warp-unavailable" });
+    return;
+  }
+
+  // WHY: 当前误差来源分散在 body mesh、patch 选择和 inverse mapping，多维指标需要统一快照才能快速归因。
+  // TRADE-OFF: debug 模式下会增加 console 输出噪音，但避免持续盲调 warp 参数。
+  console.info("[tattoo-warp diagnostics]", mesh.diagnostics ?? { status: "missing-diagnostics" });
+}
+
 export function formatTpsWarpStatusSuffix(mesh: TattooWarpMeshData | null): string {
   if (!mesh) {
     return " / TPS warp unavailable";
@@ -552,6 +582,8 @@ function syncPanelFromTransform(state: AppState, elements: AppElements): void {
   elements.paramRotation.value = String(Math.round(radiansToDegrees(state.tattooTransform.rotation)));
   elements.paramOpacity.value = state.tattooTransform.opacity.toFixed(2);
   elements.opacityInput.value = state.tattooTransform.opacity.toFixed(2);
+  elements.warpStrengthInput.value = state.warpStrength.toFixed(2);
+  elements.warpStrengthValue.textContent = state.warpStrength.toFixed(2);
 }
 
 function replaceSurfaceNormalTexture(

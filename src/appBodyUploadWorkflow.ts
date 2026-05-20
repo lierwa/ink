@@ -67,6 +67,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
     fileName: string,
     sourceCanvas: HTMLCanvasElement,
     initialParams: BodyMeshPipelineParams,
+    options: { recenterTattoo: boolean },
   ): Promise<void> => {
     const requestToken = latestRequestToken + 1;
     latestRequestToken = requestToken;
@@ -97,16 +98,18 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
         params: modalResult.params,
         preview: modalResult.preview,
       });
-      const centeredTransform = createBodyCenteredTattooTransform(
-        input.state.bodySurfaceState.placementRect,
-        input.state.tattooTransform.opacity,
-        input.initialTransform,
-      );
-
-      // WHY: Apply Body 后重置贴图中心，避免旧 body 的位置语义遗留到新 body 导致“贴图飞离人体”的错觉。
-      // TRADE-OFF: 用户需再次微调位置，但获得稳定且可预测的初始贴附点。
-      input.setTransform(centeredTransform, "body-apply");
       input.renderBodySurface();
+      const nextTransform = options.recenterTattoo
+        ? createBodyMeshCenteredTattooTransform(
+          input.state.bodySurfaceState.mesh,
+          input.state.tattooTransform.opacity,
+          input.initialTransform,
+        )
+        : { ...input.state.tattooTransform };
+
+      // WHY: Pixi 必须先绑定最新 body/mask，再用同一份最新 mesh 重建 tattoo warp；编辑 body 时保留用户当前 tattoo 位置。
+      // TRADE-OFF: 新上传 body 会自动落到 mesh 中心，编辑旧 body 不再替用户移动 tattoo。
+      input.setTransform(nextTransform, "body-apply");
       // WHY: Pixi 会按 canvas resource 缓存 Texture，同 canvas 编辑可能返回仍在使用的同一实例。
       // TRADE-OFF: 只跳过同一对象的销毁；真正替换出的旧 texture 仍按既有顺序在 rebind 后释放。
       if (previousBodyTexture !== input.state.bodySurfaceState.texture) {
@@ -151,6 +154,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
           file.name,
           sourceCanvas,
           input.state.bodySurfaceState.pipelineParams,
+          { recenterTattoo: true },
         );
       } catch (error) {
         if (!isCurrentRequest()) {
@@ -169,6 +173,7 @@ export function installBodyUploadWorkflow(input: BodyUploadWorkflowInput): void 
       input.state.bodySurfaceState.fileName,
       input.state.bodySurfaceState.sourceCanvas,
       input.state.bodySurfaceState.pipelineParams,
+      { recenterTattoo: false },
     );
   });
 
@@ -231,18 +236,39 @@ function applyBodySurfaceResult(
   };
 }
 
-function createBodyCenteredTattooTransform(
-  placementRect: Rect,
+function createBodyMeshCenteredTattooTransform(
+  mesh: SkinMeshData,
   opacity: number,
   initialTransform: TattooTransform,
 ): TattooTransform {
+  const bounds = getMeshBounds(mesh);
   return {
-    x: placementRect.x + placementRect.width / 2,
-    y: placementRect.y + placementRect.height / 2,
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
     scale: initialTransform.scale,
     rotation: initialTransform.rotation,
     opacity,
   };
+}
+
+function getMeshBounds(mesh: SkinMeshData): Rect {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (let index = 0; index < mesh.positions.length; index += 2) {
+    minX = Math.min(minX, mesh.positions[index]);
+    minY = Math.min(minY, mesh.positions[index + 1]);
+    maxX = Math.max(maxX, mesh.positions[index]);
+    maxY = Math.max(maxY, mesh.positions[index + 1]);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
 }
 
 function destroyTextureAfterPixiRebind(texture: Texture): void {

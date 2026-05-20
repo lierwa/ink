@@ -141,6 +141,88 @@ describe("installBodyUploadWorkflow", () => {
     expect(lifecycleCalls).toEqual(["render replacement body", "destroy old body"]);
   });
 
+  test("body upload recenters tattoo on the latest mesh bounds instead of the full image rect", async () => {
+    const state = createBodyWorkflowState();
+    const bodyUploadInput = document.createElement("input");
+    bodyUploadInput.type = "file";
+    Object.defineProperty(bodyUploadInput, "files", {
+      value: [new File(["body"], "body.png", { type: "image/png" })],
+    });
+    const setTransform = vi.fn();
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: {
+          positions: new Float32Array([0, 0, 16, 0, 0, 8]),
+          indices: new Uint32Array([0, 1, 2]),
+        },
+      },
+    }));
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput,
+        editBodyButton: document.createElement("button"),
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: state.tattooTransform,
+      setTransform,
+      renderBodySurface: vi.fn(),
+      resetBodySurface: vi.fn(),
+    });
+
+    bodyUploadInput.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(setTransform).toHaveBeenCalledTimes(1));
+    expect(setTransform.mock.calls[0][0]).toMatchObject({
+      x: 112.5,
+      y: 141.25,
+    });
+  });
+
+  test("edit body apply keeps the current tattoo transform and refreshes after body rebind", async () => {
+    const state = createBodyWorkflowState();
+    state.tattooTransform = { x: 280, y: 210, scale: 0.7, rotation: 0.2, opacity: 0.8 };
+    const editBodyButton = document.createElement("button");
+    const calls: string[] = [];
+    const setTransform = vi.fn(() => calls.push("refresh tattoo"));
+    const renderBodySurface = vi.fn(() => calls.push("render body"));
+    mocks.openBodyUploadModal.mockImplementation(async (input: BodyUploadModalInput) => ({
+      sourceCanvas: input.sourceCanvas,
+      params: { ...defaultBodyMeshPipelineParams },
+      preview: {
+        mask: { width: 2, height: 2, probabilities: new Float32Array(4).fill(1) },
+        mesh: createTriangleMesh(64, 32),
+      },
+    }));
+
+    installBodyUploadWorkflow({
+      state: state as never,
+      elements: {
+        bodyUploadInput: document.createElement("input"),
+        editBodyButton,
+        removeBodyButton: document.createElement("button"),
+        statusLabel: document.createElement("div"),
+      } as never,
+      pixi: { setSurfaceNormalTexture: vi.fn(), setBodyAnalysisDebug: vi.fn() } as never,
+      initialTransform: { x: 450, y: 310, scale: 0.42, rotation: 0, opacity: 1 },
+      setTransform,
+      renderBodySurface,
+      resetBodySurface: vi.fn(),
+    });
+
+    editBodyButton.click();
+
+    await vi.waitFor(() => expect(setTransform).toHaveBeenCalledTimes(1));
+    expect(setTransform).toHaveBeenCalledWith(state.tattooTransform, "body-apply");
+    expect(calls).toEqual(["render body", "refresh tattoo"]);
+  });
+
   test("keeps active body texture alive when Pixi returns the cached canvas texture", async () => {
     const state = createBodyWorkflowState();
     const cachedBodyTexture = {
