@@ -229,7 +229,9 @@ export async function createPixiTattooRenderer(
       activeProjectionMesh = resolveProjectionMesh(state.mesh, fallbackProjectionMesh);
       currentSurfaceWarpEnabled = applySurfaceNormalTextureState(resources, shader, state.surfaceNormalTexture, input.disableSurfaceWarp ?? false);
       if (currentTattooState) {
-        applyTattooSpriteState(tattooSprite, currentTattooState, { surfaceWarpEnabled: currentSurfaceWarpEnabled });
+        applyTattooSpriteState(tattooSprite, currentTattooState, {
+          surfaceWarpEnabled: resolveFlatFallbackHidden(currentTattooState, currentSurfaceWarpEnabled),
+        });
       }
 
       const previousGeometry = tattooMesh.geometry;
@@ -248,12 +250,16 @@ export async function createPixiTattooRenderer(
       tattooMesh.geometry = createMeshGeometry(tattooState.warpMesh ?? activeProjectionMesh, input.stageSize);
       previousGeometry.destroy();
       applyTattooMeshVisibilityState(tattooMesh, tattooState.transform.opacity);
-      applyTattooSpriteState(tattooSprite, tattooState, { surfaceWarpEnabled: currentSurfaceWarpEnabled });
+      applyTattooSpriteState(tattooSprite, tattooState, {
+        surfaceWarpEnabled: resolveFlatFallbackHidden(tattooState, currentSurfaceWarpEnabled),
+      });
     },
     setSurfaceNormalTexture(texture) {
       currentSurfaceWarpEnabled = applySurfaceNormalTextureState(resources, shader, texture, input.disableSurfaceWarp ?? false);
       if (currentTattooState) {
-        applyTattooSpriteState(tattooSprite, currentTattooState, { surfaceWarpEnabled: currentSurfaceWarpEnabled });
+        applyTattooSpriteState(tattooSprite, currentTattooState, {
+          surfaceWarpEnabled: resolveFlatFallbackHidden(currentTattooState, currentSurfaceWarpEnabled),
+        });
       }
     },
     clearTattoo() {
@@ -338,7 +344,14 @@ export function applyTattooSpriteState(
   sprite.y = state.transform.y;
   sprite.rotation = state.transform.rotation;
   sprite.alpha = state.transform.opacity;
-  sprite.visible = state.transform.opacity > 0 && !options.surfaceWarpEnabled;
+  sprite.visible = state.transform.opacity > 0 && !resolveFlatFallbackHidden(state, options.surfaceWarpEnabled ?? false);
+}
+
+export function resolveFlatFallbackHidden(
+  state: Pick<PixiTattooState, "warpMesh">,
+  currentSurfaceWarpEnabled: boolean,
+): boolean {
+  return Boolean(state.warpMesh) || currentSurfaceWarpEnabled;
 }
 
 export function applyTattooMeshVisibilityState(

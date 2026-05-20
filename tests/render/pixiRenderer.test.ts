@@ -20,6 +20,7 @@ import {
   tattooBlendMode,
   tattooProjectionFragmentHeader,
   tattooProjectionFragmentMain,
+  resolveFlatFallbackHidden,
 } from "../../src/render/pixiRenderer";
 import { activeDebugMeshStrokeStyle, drawActiveDebugMesh, syncDebugMeshWireframe } from "../../src/render/pixiDebugGeometry";
 import type { SkinMeshData } from "../../src/domain/types";
@@ -255,6 +256,64 @@ describe("tattoo sprite visibility fallback", () => {
     }, { surfaceWarpEnabled: true });
 
     expect(sprite.visible).toBe(false);
+  });
+
+  test("plain sprite fallback is hidden when a warped tattoo mesh exists without surface-normal warp", () => {
+    const source = { id: "tattoo-texture" } as unknown as Texture["source"];
+    const texture = { source } as unknown as Texture;
+    const warpMesh = {
+      positions: new Float32Array([82, 43, 186, 58, 76, 155]),
+      uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+      indices: new Uint32Array([0, 1, 2]),
+      debugLines: [],
+      controlPoints: [],
+      stats: { maxDisplacementPx: 0, meanDisplacementPx: 0 },
+    };
+    const state = {
+      texture,
+      tattooSize: { width: 220, height: 180 },
+      transform: {
+        x: 402,
+        y: 198,
+        scale: 0.52,
+        rotation: 0.27,
+        opacity: 0.67,
+      },
+      warpMesh,
+    };
+    const sprite = {
+      texture: Texture.EMPTY,
+      anchor: { set: vi.fn() },
+      scale: { set: vi.fn() },
+      x: 0,
+      y: 0,
+      rotation: 0,
+      alpha: 0,
+      visible: true,
+    };
+
+    expect(resolveFlatFallbackHidden(state, false)).toBe(true);
+    applyTattooSpriteState(sprite as never, state, { surfaceWarpEnabled: false });
+
+    expect(sprite.visible).toBe(false);
+  });
+
+  test("plain sprite fallback stays available for flat tattoo state without mesh warp or surface warp", () => {
+    const texture = { source: { id: "tattoo-texture" } } as unknown as Texture;
+    const state = {
+      texture,
+      tattooSize: { width: 220, height: 180 },
+      transform: {
+        x: 402,
+        y: 198,
+        scale: 0.52,
+        rotation: 0.27,
+        opacity: 0.67,
+      },
+      warpMesh: null,
+    };
+
+    expect(resolveFlatFallbackHidden(state, false)).toBe(false);
   });
 
   test("clearTattoo path hides the plain sprite fallback", () => {
