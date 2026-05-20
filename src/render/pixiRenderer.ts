@@ -26,7 +26,7 @@ import type {
 } from "../domain/types";
 import { createBackdrop } from "./pixiBackdrop";
 import { installContextLifecycleHandlers } from "./pixiContextLifecycle";
-import { drawBodyAnalysisDebug, syncDebugMeshWireframe } from "./pixiDebugGeometry";
+import { drawBodyAnalysisDebug, drawTattooWarpDebugGrid, syncDebugMeshWireframe } from "./pixiDebugGeometry";
 import { ensureTattooSizeUniform, ensureTattooTransformUniform } from "./pixiShaderUniforms";
 export {
   createBodyAnalysisDebugSegments,
@@ -136,6 +136,7 @@ export async function createPixiTattooRenderer(
   const tattooSprite = new Sprite(Texture.EMPTY);
   const debugWireframe = new Graphics();
   const bodyAnalysisDebug = new Graphics();
+  const tattooWarpDebug = new Graphics();
   let bodyMesh: SkinMeshData | null = null;
   let bodyMaskTexture: Texture | null = null;
   let currentTattooState: PixiTattooState | null = null;
@@ -170,6 +171,7 @@ export async function createPixiTattooRenderer(
   tattooSprite.zIndex = 4;
   debugWireframe.zIndex = 100;
   bodyAnalysisDebug.zIndex = 101;
+  tattooWarpDebug.zIndex = 102;
 
   configureBodyMaskForMasking(bodyMask);
   bodySprite.anchor.set(0);
@@ -185,6 +187,7 @@ export async function createPixiTattooRenderer(
   tattooSprite.alpha = 0;
   debugWireframe.visible = false;
   bodyAnalysisDebug.visible = false;
+  tattooWarpDebug.visible = false;
 
   app.stage.addChild(backdrop);
   app.stage.addChild(bodyMask);
@@ -193,6 +196,7 @@ export async function createPixiTattooRenderer(
   app.stage.addChild(tattooSprite);
   app.stage.addChild(debugWireframe);
   app.stage.addChild(bodyAnalysisDebug);
+  app.stage.addChild(tattooWarpDebug);
 
   return {
     canvas: app.canvas,
@@ -244,6 +248,7 @@ export async function createPixiTattooRenderer(
         input.stageSize,
       );
       previousGeometry.destroy();
+      drawTattooWarpDebugGrid(tattooWarpDebug, tattooState.warpMesh?.debugLines ?? []);
       applyTattooMeshVisibilityState(tattooMesh, tattooState.transform.opacity);
       applyTattooSpriteState(tattooSprite, tattooState, {
         surfaceWarpEnabled: resolveFlatFallbackHidden(tattooState, currentSurfaceWarpEnabled),
@@ -265,6 +270,7 @@ export async function createPixiTattooRenderer(
     },
     setDebugMeshVisible(visible) {
       syncDebugMeshWireframe(debugWireframe, visible, skinDebugMeshOverride ?? bodyMesh);
+      tattooWarpDebug.visible = visible;
     },
     setSkinDebugMesh(mesh) {
       skinDebugMeshOverride = mesh;

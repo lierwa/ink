@@ -23,7 +23,12 @@ import {
   resolveFlatFallbackHidden,
   resolveTattooGeometryMesh,
 } from "../../src/render/pixiRenderer";
-import { activeDebugMeshStrokeStyle, drawActiveDebugMesh, syncDebugMeshWireframe } from "../../src/render/pixiDebugGeometry";
+import {
+  activeDebugMeshStrokeStyle,
+  drawActiveDebugMesh,
+  drawTattooWarpDebugGrid,
+  syncDebugMeshWireframe,
+} from "../../src/render/pixiDebugGeometry";
 import type { SkinMeshData } from "../../src/domain/types";
 import { Texture } from "pixi.js";
 import { buildSphereMesh } from "../../src/domain/sphereMesh";
@@ -455,6 +460,28 @@ describe("createSkinWireframeSegments", () => {
     syncDebugMeshWireframe(graphics as never, false, mesh);
 
     expect(graphics.visible).toBe(false);
+  });
+});
+
+describe("tattoo warp debug grid", () => {
+  test("draws warped grid lines with a visible cyan style", () => {
+    const strokes: unknown[] = [];
+    const moves: Array<[number, number]> = [];
+    const graphics = {
+      clear: vi.fn(),
+      moveTo: (x: number, y: number) => moves.push([x, y]),
+      lineTo: vi.fn(),
+      stroke: (style: unknown) => strokes.push(style),
+    };
+
+    drawTattooWarpDebugGrid(graphics as never, [
+      { source: { x: 0, y: 0 }, destination: { x: 10, y: 10 } },
+      { source: { x: 100, y: 0 }, destination: { x: 120, y: 18 } },
+    ]);
+
+    expect(graphics.clear).toHaveBeenCalled();
+    expect(moves[0]).toEqual([10, 10]);
+    expect(strokes).toEqual([{ color: 0x18c6ff, width: 1.5, alpha: 0.86 }]);
   });
 });
 

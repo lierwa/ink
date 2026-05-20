@@ -1,8 +1,9 @@
 import { Graphics } from "pixi.js";
 import { buildSphereWireframeSegments, type SphereMeshData } from "../domain/sphereMesh";
-import type { BodySurfaceAnalysisDebugState, SkinMeshData } from "../domain/types";
+import type { BodySurfaceAnalysisDebugState, SkinMeshData, TattooWarpDebugLine } from "../domain/types";
 
 export const activeDebugMeshStrokeStyle = { color: 0xd04f24, width: 1, alpha: 0.74 };
+export const tattooWarpDebugGridStrokeStyle = { color: 0x18c6ff, width: 1.5, alpha: 0.86 };
 
 export function createSkinWireframeSegments(mesh: SkinMeshData): Float32Array {
   const segments: number[] = [];
@@ -46,6 +47,27 @@ export function drawActiveDebugMesh(graphics: Graphics, mesh: SkinMeshData | nul
   }
 
   graphics.stroke(activeDebugMeshStrokeStyle);
+}
+
+export function drawTattooWarpDebugGrid(graphics: Graphics, lines: TattooWarpDebugLine[]): void {
+  graphics.clear();
+
+  for (let index = 0; index < lines.length; index += 2) {
+    const start = lines[index]?.destination;
+    const end = lines[index + 1]?.destination;
+    if (!start || !end) {
+      continue;
+    }
+
+    // WHY: debugLines 已由 domain 成对输出 source/destination；这里只消费 warped 后的舞台坐标，避免 renderer 复刻 TPS 逻辑。
+    // TRADE-OFF: 奇数尾点会被忽略，换取绘制路径简单且与 mesh 生成边界保持解耦。
+    graphics.moveTo(start.x, start.y);
+    graphics.lineTo(end.x, end.y);
+  }
+
+  if (lines.length > 1) {
+    graphics.stroke(tattooWarpDebugGridStrokeStyle);
+  }
 }
 
 export function syncDebugMeshWireframe(
