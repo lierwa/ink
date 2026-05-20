@@ -132,7 +132,13 @@ export async function startApp(): Promise<void> {
   const state = initializeAppState(defaultBodyCanvas);
   let pixi: PixiTattooRenderer;
   const forceRefreshLocalSurface = (): void => refreshLocalSurface(state, elements, pixi);
-  const scheduleLiveSurfaceRefresh = createLiveSurfaceRefreshScheduler(forceRefreshLocalSurface);
+  const refreshLocalSurfaceAndRenderTattoo = (): void => {
+    refreshTattooWarpAndRenderTattoo(
+      forceRefreshLocalSurface,
+      () => renderTattoo(state, pixi),
+    );
+  };
+  const scheduleLiveSurfaceRefresh = createLiveSurfaceRefreshScheduler(refreshLocalSurfaceAndRenderTattoo);
 
   pixi = await createPixiTattooRenderer({
     mount: elements.pixiLayer,
@@ -144,8 +150,7 @@ export async function startApp(): Promise<void> {
     },
     onContextRestored: () => {
       renderBodySurface(state, pixi);
-      forceRefreshLocalSurface();
-      renderTattoo(state, pixi);
+      refreshLocalSurfaceAndRenderTattoo();
     },
   });
 
@@ -177,10 +182,7 @@ export async function startApp(): Promise<void> {
     },
     fabric,
     initialTransform,
-    renderTattoo: () => {
-      forceRefreshLocalSurface();
-      renderTattoo(state, pixi);
-    },
+    renderTattoo: refreshLocalSurfaceAndRenderTattoo,
     syncPanelFromTransform: () => syncPanelFromTransform(state, elements),
   });
   installBodyUploadWorkflow({
@@ -203,8 +205,7 @@ export async function startApp(): Promise<void> {
       scheduleLiveSurfaceRefresh.cancel();
       resetBodySurface(state, pixi);
       renderBodySurface(state, pixi);
-      forceRefreshLocalSurface();
-      renderTattoo(state, pixi);
+      refreshLocalSurfaceAndRenderTattoo();
     },
   });
   installDebugAndResetControls(elements, pixi, fabric, setTransform);
@@ -350,7 +351,12 @@ function installTransformControls(
   elements.paramOpacity.addEventListener("input", () => setOpacity(Number(elements.paramOpacity.value)));
   elements.shadingGeometryAssistInput.addEventListener("change", () => {
     state.shadingGeometryAssistEnabled = elements.shadingGeometryAssistInput.checked;
-    refreshLocalSurface(state, elements, pixi);
+    // WHY: shading assist 会改变局部曲面和 TPS mesh，刷新后必须重新提交 tattoo 状态给 Pixi。
+    // TRADE-OFF: 开关时多一次 tattoo state 提交，但避免 shader/geometry 继续使用旧 warpMesh。
+    refreshTattooWarpAndRenderTattoo(
+      () => refreshLocalSurface(state, elements, pixi),
+      () => renderTattoo(state, pixi),
+    );
   });
 
   for (const input of [elements.paramX, elements.paramY, elements.paramScale, elements.paramRotation]) {
@@ -448,6 +454,14 @@ export function createTattooRenderState(
     transform: state.tattooTransform,
     warpMesh: state.tattooWarpMesh,
   };
+}
+
+export function refreshTattooWarpAndRenderTattoo(
+  refreshTattooWarp: () => void,
+  renderCurrentTattoo: () => void,
+): void {
+  refreshTattooWarp();
+  renderCurrentTattoo();
 }
 
 function getTattooBounds(size: Size, transform: TattooTransform): Rect {

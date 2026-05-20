@@ -10,6 +10,7 @@ import {
   formatTpsWarpStatusSuffix,
   mapSkinMeshToPlacementRect,
   normalizeSkinMeshImageSize,
+  refreshTattooWarpAndRenderTattoo,
 } from "../src/app";
 import type { BodyMeshPipelineParams, SkinMeshData, TattooWarpMeshData } from "../src/domain/types";
 import { defaultBodyMeshPipelineParams } from "../src/domain/skinMeshPipeline";
@@ -87,6 +88,44 @@ describe("createTattooRenderState", () => {
       },
       warpMesh,
     });
+  });
+});
+
+describe("refreshTattooWarpAndRenderTattoo", () => {
+  test("renders tattoo after refresh so Pixi receives the updated warp mesh", () => {
+    const refreshedWarpMesh = createWarpMesh(21);
+    const setTattoo = vi.fn();
+    const state = {
+      tattooAsset: { texture: Texture.EMPTY, size: { width: 64, height: 48 } },
+      tattooTransform: {
+        x: 100,
+        y: 120,
+        scale: 0.5,
+        rotation: 0.25,
+        opacity: 0.8,
+      },
+      tattooWarpMesh: createWarpMesh(4),
+    };
+    const calls: string[] = [];
+
+    refreshTattooWarpAndRenderTattoo(
+      () => {
+        calls.push("refresh");
+        state.tattooWarpMesh = refreshedWarpMesh;
+      },
+      () => {
+        calls.push("render");
+        const renderState = createTattooRenderState(state);
+        if (renderState) {
+          setTattoo(renderState);
+        }
+      },
+    );
+
+    expect(calls).toEqual(["refresh", "render"]);
+    expect(setTattoo).toHaveBeenCalledWith(expect.objectContaining({
+      warpMesh: refreshedWarpMesh,
+    }));
   });
 });
 
