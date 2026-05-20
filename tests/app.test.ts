@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
+import { Texture } from "pixi.js";
 import { describe, expect, test, vi } from "vitest";
 import { createAppMarkup } from "../src/appMarkup";
 import {
+  createTattooRenderState,
   computeContainPlacementRect,
   createBodyMeshPreviewBuilder,
   createSkinMaskWithFallback,
+  formatTpsWarpStatusSuffix,
   mapSkinMeshToPlacementRect,
   normalizeSkinMeshImageSize,
 } from "../src/app";
-import type { BodyMeshPipelineParams, SkinMeshData } from "../src/domain/types";
+import type { BodyMeshPipelineParams, SkinMeshData, TattooWarpMeshData } from "../src/domain/types";
 import { defaultBodyMeshPipelineParams } from "../src/domain/skinMeshPipeline";
 
 describe("createAppMarkup", () => {
@@ -42,6 +45,51 @@ describe("normalizeSkinMeshImageSize", () => {
   });
 });
 
+describe("formatTpsWarpStatusSuffix", () => {
+  test("reports rounded TPS warp displacement when mesh is available", () => {
+    expect(formatTpsWarpStatusSuffix(createWarpMesh(15.6))).toBe(" / TPS warp 16px");
+  });
+
+  test("reports unavailable TPS warp when mesh is missing", () => {
+    expect(formatTpsWarpStatusSuffix(null)).toBe(" / TPS warp unavailable");
+  });
+});
+
+describe("createTattooRenderState", () => {
+  test("passes the current warp mesh through to Pixi tattoo state", () => {
+    const warpMesh = createWarpMesh(8.2);
+    const texture = Texture.EMPTY;
+
+    const renderState = createTattooRenderState({
+      tattooAsset: {
+        texture,
+        size: { width: 64, height: 48 },
+      },
+      tattooTransform: {
+        x: 100,
+        y: 120,
+        scale: 0.5,
+        rotation: 0.25,
+        opacity: 0.8,
+      },
+      tattooWarpMesh: warpMesh,
+    });
+
+    expect(renderState).toEqual({
+      texture,
+      tattooSize: { width: 64, height: 48 },
+      transform: {
+        x: 100,
+        y: 120,
+        scale: 0.5,
+        rotation: 0.25,
+        opacity: 0.8,
+      },
+      warpMesh,
+    });
+  });
+});
+
 describe("computeContainPlacementRect", () => {
   test("fits image inside stage with centered letterboxing", () => {
     const rect = computeContainPlacementRect(
@@ -55,6 +103,20 @@ describe("computeContainPlacementRect", () => {
     expect(rect.y).toBe(85);
   });
 });
+
+function createWarpMesh(maxDisplacementPx: number): TattooWarpMeshData {
+  return {
+    positions: new Float32Array([0, 0, 1, 0, 0, 1]),
+    uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+    indices: new Uint32Array([0, 1, 2]),
+    debugLines: [],
+    controlPoints: [],
+    stats: {
+      maxDisplacementPx,
+      meanDisplacementPx: maxDisplacementPx / 2,
+    },
+  };
+}
 
 describe("mapSkinMeshToPlacementRect", () => {
   test("maps image-space skin mesh into body placement rectangle coordinates", () => {

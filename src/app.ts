@@ -6,6 +6,7 @@ import {
   createPixiTattooRenderer,
   type BodySurfaceRenderState,
   type PixiTattooRenderer,
+  type PixiTattooState,
 } from "./render/pixiRenderer";
 import { createAppMarkup, createCanvasMarkup } from "./appMarkup";
 import { isSameTattooTransform } from "./appUploadQueue";
@@ -22,6 +23,7 @@ import {
   defaultBodyMeshPipelineParams,
 } from "./domain/skinMeshPipeline";
 import { buildLocalMeshSurface } from "./domain/localMeshSurface";
+import { buildTattooWarpMesh } from "./domain/tattooWarpMesh";
 import { createFlatSurfaceNormalTexture, createSurfaceNormalTexture } from "./image/surfaceNormalTexture";
 import { meshResolution, sphere, stageSize } from "./sphereConfig";
 import { buildSphereMesh } from "./domain/sphereMesh";
@@ -33,6 +35,7 @@ import type {
   SkinMask,
   SkinMeshData,
   TattooTransform,
+  TattooWarpMeshData,
 } from "./domain/types";
 
 export {
@@ -78,9 +81,16 @@ interface TattooAssetState {
 interface AppState {
   tattooTransform: TattooTransform;
   tattooAsset: TattooAssetState | null;
+  tattooWarpMesh: TattooWarpMeshData | null;
   transformRevision: number;
   shadingGeometryAssistEnabled: boolean;
   bodySurfaceState: BodySurfaceState;
+}
+
+interface TattooRenderStateInput {
+  tattooAsset: Pick<TattooAssetState, "texture" | "size"> | null;
+  tattooTransform: TattooTransform;
+  tattooWarpMesh: TattooWarpMeshData | null;
 }
 
 interface AppElements {
@@ -254,6 +264,7 @@ function initializeAppState(
   return {
     tattooTransform: { ...initialTransform },
     tattooAsset: null,
+    tattooWarpMesh: null,
     transformRevision: 0,
     shadingGeometryAssistEnabled: false,
     bodySurfaceState: {
@@ -297,15 +308,18 @@ function createTransformSetter(
     }
 
     syncPanelFromTransform(state, elements);
-    renderTattoo(state, pixi);
     if (source === "fabric" && phase === "live") {
+      renderTattoo(state, pixi);
       if (state.tattooAsset) {
         scheduleLiveSurfaceRefresh.schedule();
       }
       return;
     }
     scheduleLiveSurfaceRefresh.cancel();
+    // WHY: commit 路径必须先刷新局部曲面与 TPS mesh，再把 tattoo 交给 Pixi；否则会先渲染一帧旧 warpMesh。
+    // TRADE-OFF: live 拖拽仍使用当前 mesh 保持交互轻量，commit 时多一次同步曲面计算换取最终落点一致性。
     refreshLocalSurface(state, elements, pixi);
+    renderTattoo(state, pixi);
   };
 }
 
@@ -359,6 +373,7 @@ function renderBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
 
 function refreshLocalSurface(state: AppState, elements: AppElements, pixi: PixiTattooRenderer): void {
   if (!state.tattooAsset) {
+    state.tattooWarpMesh = null;
     replaceSurfaceNormalTexture(state, pixi, null);
     state.bodySurfaceState.analysisDebug = null;
     refreshSurfaceStatus(state, elements);
@@ -384,6 +399,11 @@ function refreshLocalSurface(state: AppState, elements: AppElements, pixi: PixiT
     : null;
   replaceSurfaceNormalTexture(state, pixi, nextSurfaceNormalTexture);
   state.bodySurfaceState.analysisDebug = localSurface.debug;
+  state.tattooWarpMesh = buildTattooWarpMesh({
+    tattooSize: state.tattooAsset.size,
+    transform: state.tattooTransform,
+    surface: localSurface.debug.source === "local-mesh" ? localSurface.debug : null,
+  });
   refreshSurfaceStatus(state, elements);
 }
 
@@ -406,16 +426,28 @@ function installDebugAndResetControls(
 }
 
 function renderTattoo(state: AppState, pixi: PixiTattooRenderer): void {
-  if (!state.tattooAsset) {
+  const tattooState = createTattooRenderState(state);
+  if (!tattooState) {
     pixi.clearTattoo();
     return;
   }
 
-  pixi.setTattoo({
+  pixi.setTattoo(tattooState);
+}
+
+export function createTattooRenderState(
+  state: TattooRenderStateInput,
+): PixiTattooState | null {
+  if (!state.tattooAsset) {
+    return null;
+  }
+
+  return {
     texture: state.tattooAsset.texture,
     tattooSize: state.tattooAsset.size,
     transform: state.tattooTransform,
-  });
+    warpMesh: state.tattooWarpMesh,
+  };
 }
 
 function getTattooBounds(size: Size, transform: TattooTransform): Rect {
@@ -434,7 +466,15 @@ function refreshSurfaceStatus(state: AppState, elements: AppElements): void {
   if (!debug) {
     return;
   }
-  elements.statusLabel.textContent = formatLocalSurfaceStatus(debug);
+  elements.statusLabel.textContent = `${formatLocalSurfaceStatus(debug)}${formatTpsWarpStatusSuffix(state.tattooWarpMesh)}`;
+}
+
+export function formatTpsWarpStatusSuffix(mesh: TattooWarpMeshData | null): string {
+  if (!mesh) {
+    return " / TPS warp unavailable";
+  }
+
+  return ` / TPS warp ${Math.round(mesh.stats.maxDisplacementPx)}px`;
 }
 
 function formatLocalSurfaceStatus(debug: BodySurfaceAnalysisDebugState): string {
