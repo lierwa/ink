@@ -81,6 +81,7 @@ describe("buildTattooWarpMesh", () => {
     }
 
     expect(mesh.debugLines.length).toBeGreaterThan(0);
+    expect(mesh.debugLines.length % 2).toBe(0);
 
     const firstLine = mesh.debugLines[0];
     expect(Number.isFinite(firstLine?.source.x)).toBe(true);
@@ -91,31 +92,39 @@ describe("buildTattooWarpMesh", () => {
     const flatRightEdge = transform.x + (200 * transform.scale) / 2;
     const center = { x: 100, y: 60 };
     const flatCenter = { x: transform.x, y: transform.y };
-    const hasRightEdgeExpansion = mesh.debugLines.some((line) => line.destination.x > flatRightEdge);
-    const hasCenterWarp = mesh.debugLines.some(
-      (line) =>
-        Math.hypot(line.source.x - center.x, line.source.y - center.y) < 1 &&
-        Math.hypot(line.destination.x - flatCenter.x, line.destination.y - flatCenter.y) > 3,
-    );
-    const hasTiltedAdjacentSegment = mesh.debugLines.some((line, index, lines) => {
-      if (index === 0) {
-        return false;
-      }
+    let hasAdjacentPair = false;
+    let hasRightEdgeExpansion = false;
+    let hasCenterWarp = false;
+    let hasTiltedAdjacentSegment = false;
 
-      const previous = lines[index - 1];
-      const sharesAxis =
-        previous.source.x === line.source.x ||
-        previous.source.y === line.source.y ||
-        previous.destination.x === line.destination.x ||
-        previous.destination.y === line.destination.y;
+    for (let index = 0; index < mesh.debugLines.length; index += 2) {
+      const start = mesh.debugLines[index];
+      const end = mesh.debugLines[index + 1];
+      const sourceDx = Math.abs(end.source.x - start.source.x);
+      const sourceDy = Math.abs(end.source.y - start.source.y);
+      const isHorizontal = start.source.y === end.source.y && sourceDx === 50;
+      const isVertical = start.source.x === end.source.x && sourceDy === 40;
+      const hasFiniteDestinations =
+        Number.isFinite(start.destination.x) &&
+        Number.isFinite(start.destination.y) &&
+        Number.isFinite(end.destination.x) &&
+        Number.isFinite(end.destination.y);
 
-      return (
-        sharesAxis &&
-        Math.abs(line.destination.x - previous.destination.x) > 1 &&
-        Math.abs(line.destination.y - previous.destination.y) > 1
-      );
-    });
+      expect((isHorizontal || isVertical) && hasFiniteDestinations).toBe(true);
+      hasAdjacentPair ||= isHorizontal || isVertical;
+      hasRightEdgeExpansion ||= start.destination.x > flatRightEdge || end.destination.x > flatRightEdge;
+      hasCenterWarp ||=
+        Math.hypot(start.source.x - center.x, start.source.y - center.y) < 1 &&
+        Math.hypot(start.destination.x - flatCenter.x, start.destination.y - flatCenter.y) > 3;
+      hasCenterWarp ||=
+        Math.hypot(end.source.x - center.x, end.source.y - center.y) < 1 &&
+        Math.hypot(end.destination.x - flatCenter.x, end.destination.y - flatCenter.y) > 3;
+      hasTiltedAdjacentSegment ||=
+        Math.abs(end.destination.x - start.destination.x) > 1 &&
+        Math.abs(end.destination.y - start.destination.y) > 1;
+    }
 
+    expect(hasAdjacentPair).toBe(true);
     expect(hasRightEdgeExpansion || hasCenterWarp || hasTiltedAdjacentSegment).toBe(true);
   });
 });

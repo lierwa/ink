@@ -41,14 +41,13 @@ export function buildTattooWarpMesh(input: TattooWarpMeshInput): TattooWarpMeshD
   const vertexCount = (columns + 1) * (rows + 1);
   const positions = new Float32Array(vertexCount * 2);
   const uvs = new Float32Array(vertexCount * 2);
-  const debugLines: TattooWarpDebugLine[] = [];
-  const stats = fillVertices({ input, columns, rows, transformer, positions, uvs, debugLines });
+  const stats = fillVertices({ input, columns, rows, transformer, positions, uvs });
 
   return {
     positions,
     uvs,
     indices: buildIndices(columns, rows),
-    debugLines,
+    debugLines: buildDebugLines(input.tattooSize, columns, rows, transformer),
     controlPoints,
     stats,
   };
@@ -127,7 +126,6 @@ function fillVertices(params: {
   transformer: ReturnType<typeof createThinPlateSplineTransformer>;
   positions: Float32Array;
   uvs: Float32Array;
-  debugLines: TattooWarpDebugLine[];
 }): TattooWarpMeshData["stats"] {
   let maxDisplacementPx = 0;
   let totalDisplacementPx = 0;
@@ -142,7 +140,6 @@ function fillVertices(params: {
       maxDisplacementPx = Math.max(maxDisplacementPx, displacement);
       totalDisplacementPx += displacement;
       writeVertex(params.positions, params.uvs, index, warped, column / params.columns, row / params.rows);
-      appendDebugPoint(params.debugLines, source, warped, column, row, params.columns);
     }
   }
 
@@ -170,17 +167,46 @@ function buildIndices(columns: number, rows: number): Uint32Array {
   return indices;
 }
 
-function appendDebugPoint(
-  debugLines: TattooWarpDebugLine[],
-  source: Point,
-  destination: Point,
-  column: number,
-  row: number,
+function buildDebugLines(
+  tattooSize: Size,
   columns: number,
-): void {
-  if (row % 2 === 0 || column === Math.floor(columns / 2)) {
-    debugLines.push({ source, destination });
+  rows: number,
+  transformer: ReturnType<typeof createThinPlateSplineTransformer>,
+): TattooWarpDebugLine[] {
+  const debugLines: TattooWarpDebugLine[] = [];
+
+  for (let column = 0; column <= columns; column += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      pushDebugLine(debugLines, transformer, [
+        sourceAt(tattooSize, column / columns, row / rows),
+        sourceAt(tattooSize, column / columns, (row + 1) / rows),
+      ]);
+    }
   }
+
+  for (let row = 0; row <= rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      pushDebugLine(debugLines, transformer, [
+        sourceAt(tattooSize, column / columns, row / rows),
+        sourceAt(tattooSize, (column + 1) / columns, row / rows),
+      ]);
+    }
+  }
+
+  return debugLines;
+}
+
+function pushDebugLine(
+  debugLines: TattooWarpDebugLine[],
+  transformer: ReturnType<typeof createThinPlateSplineTransformer>,
+  endpoints: [Point, Point],
+): void {
+  // WHY: 调试渲染器按 [0,1]、[2,3] 消费端点，必须在域层保持相邻线段边界；
+  // TRADE-OFF: 这里会重复共享顶点，但换来渲染端零状态、无索引重建的简单协议。
+  debugLines.push(
+    { source: endpoints[0], destination: transformer.transform(endpoints[0]) },
+    { source: endpoints[1], destination: transformer.transform(endpoints[1]) },
+  );
 }
 
 function writeVertex(
