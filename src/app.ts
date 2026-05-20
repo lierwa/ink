@@ -287,7 +287,7 @@ function initializeAppState(
   };
 }
 
-function createTransformSetter(
+export function createTransformSetter(
   state: AppState,
   elements: AppElements,
   pixi: PixiTattooRenderer,
@@ -313,15 +313,15 @@ function createTransformSetter(
 
     syncPanelFromTransform(state, elements);
     if (source === "fabric" && phase === "live") {
-      renderTattoo(state, pixi);
-      if (state.tattooAsset) {
-        scheduleLiveSurfaceRefresh.schedule();
-      }
+      scheduleLiveSurfaceRefresh.cancel();
+      // WHY: Pixi 直接消费 warpMesh 顶点/UV，live 拖拽也必须先重建 TPS mesh，避免新 transform 搭配旧几何。
+      // TRADE-OFF: 放弃旧的“先廉价渲染、稍后刷新”路径，拖拽时多做同步曲面计算，换取任意帧都不提交 stale mesh。
+      refreshLocalSurfaceForTattooRender(state, elements, pixi);
       return;
     }
     scheduleLiveSurfaceRefresh.cancel();
-    // WHY: commit 路径必须先刷新局部曲面与 TPS mesh，再把 tattoo 交给 Pixi；否则会先渲染一帧旧 warpMesh。
-    // TRADE-OFF: live 拖拽仍使用当前 mesh 保持交互轻量，commit 时多一次同步曲面计算换取最终落点一致性。
+    // WHY: 非 live 路径同样先刷新局部曲面与 TPS mesh，再把 tattoo 交给 Pixi，保证最终落点与几何一致。
+    // TRADE-OFF: 提交时多一次同步曲面计算，但避免 shader/geometry 继续沿用旧 warpMesh。
     refreshLocalSurfaceForTattooRender(state, elements, pixi);
   };
 }

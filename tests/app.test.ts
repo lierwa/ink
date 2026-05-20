@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createAppMarkup } from "../src/appMarkup";
 import {
   createTattooRenderState,
+  createTransformSetter,
   computeContainPlacementRect,
   createBodyMeshPreviewBuilder,
   createSkinMaskWithFallback,
@@ -156,6 +157,55 @@ describe("refreshLocalSurfaceForTattooRender", () => {
   });
 });
 
+describe("createTransformSetter", () => {
+  test("rebuilds TPS warp before Pixi receives live Fabric transform state", () => {
+    const contextSpy = installCanvasContextStub();
+    const statusLabel = document.createElement("div");
+    const state = createRefreshIntegrationState();
+    const staleWarpMesh = createWarpMesh(3);
+    state.tattooWarpMesh = staleWarpMesh;
+    const pixi = {
+      setSurfaceNormalTexture: vi.fn(),
+      setTattoo: vi.fn(),
+      clearTattoo: vi.fn(),
+    };
+    const scheduleLiveSurfaceRefresh = {
+      schedule: vi.fn(),
+      cancel: vi.fn(),
+    };
+    const setTransform = createTransformSetter(
+      state,
+      createTransformSetterElements(statusLabel),
+      pixi as never,
+      () => ({ setTransform: vi.fn() }) as never,
+      scheduleLiveSurfaceRefresh,
+    );
+
+    try {
+      setTransform({
+        ...state.tattooTransform,
+        x: 470,
+        y: 330,
+        scale: 1.08,
+      }, "fabric", "live");
+    } finally {
+      contextSpy.mockRestore();
+    }
+
+    expect(state.tattooWarpMesh).not.toBe(staleWarpMesh);
+    expect(state.tattooWarpMesh?.stats.maxDisplacementPx).toBeGreaterThan(10);
+    expect(pixi.setTattoo).toHaveBeenCalledTimes(1);
+    expect(pixi.setTattoo).toHaveBeenCalledWith(expect.objectContaining({
+      warpMesh: state.tattooWarpMesh,
+    }));
+    expect(pixi.setTattoo).not.toHaveBeenCalledWith(expect.objectContaining({
+      warpMesh: staleWarpMesh,
+    }));
+    expect(scheduleLiveSurfaceRefresh.schedule).not.toHaveBeenCalled();
+    expect(statusLabel.textContent).toContain("TPS warp");
+  });
+});
+
 describe("computeContainPlacementRect", () => {
   test("fits image inside stage with centered letterboxing", () => {
     const rect = computeContainPlacementRect(
@@ -236,6 +286,21 @@ function createRefreshIntegrationState() {
       revision: 0,
     },
   };
+}
+
+function createTransformSetterElements(statusLabel: HTMLElement) {
+  return {
+    transformPanel: document.createElement("div"),
+    editTattooButton: document.createElement("button"),
+    removeTattooButton: document.createElement("button"),
+    paramX: document.createElement("input"),
+    paramY: document.createElement("input"),
+    paramScale: document.createElement("input"),
+    paramRotation: document.createElement("input"),
+    paramOpacity: document.createElement("input"),
+    opacityInput: document.createElement("input"),
+    statusLabel,
+  } as never;
 }
 
 function installCanvasContextStub() {
