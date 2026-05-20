@@ -93,6 +93,15 @@ interface TattooRenderStateInput {
   tattooWarpMesh: TattooWarpMeshData | null;
 }
 
+interface SurfaceStatusElements {
+  statusLabel: HTMLElement;
+}
+
+type TattooSurfaceRefreshRenderer = Pick<
+  PixiTattooRenderer,
+  "clearTattoo" | "setSurfaceNormalTexture" | "setTattoo"
+>;
+
 interface AppElements {
   canvasFrame: HTMLDivElement;
   stageStack: HTMLDivElement;
@@ -131,13 +140,7 @@ export async function startApp(): Promise<void> {
   const defaultBodyCanvas = createDefaultBodyCanvas();
   const state = initializeAppState(defaultBodyCanvas);
   let pixi: PixiTattooRenderer;
-  const forceRefreshLocalSurface = (): void => refreshLocalSurface(state, elements, pixi);
-  const refreshLocalSurfaceAndRenderTattoo = (): void => {
-    refreshTattooWarpAndRenderTattoo(
-      forceRefreshLocalSurface,
-      () => renderTattoo(state, pixi),
-    );
-  };
+  const refreshLocalSurfaceAndRenderTattoo = (): void => refreshLocalSurfaceForTattooRender(state, elements, pixi);
   const scheduleLiveSurfaceRefresh = createLiveSurfaceRefreshScheduler(refreshLocalSurfaceAndRenderTattoo);
 
   pixi = await createPixiTattooRenderer({
@@ -319,8 +322,7 @@ function createTransformSetter(
     scheduleLiveSurfaceRefresh.cancel();
     // WHY: commit 路径必须先刷新局部曲面与 TPS mesh，再把 tattoo 交给 Pixi；否则会先渲染一帧旧 warpMesh。
     // TRADE-OFF: live 拖拽仍使用当前 mesh 保持交互轻量，commit 时多一次同步曲面计算换取最终落点一致性。
-    refreshLocalSurface(state, elements, pixi);
-    renderTattoo(state, pixi);
+    refreshLocalSurfaceForTattooRender(state, elements, pixi);
   };
 }
 
@@ -353,10 +355,7 @@ function installTransformControls(
     state.shadingGeometryAssistEnabled = elements.shadingGeometryAssistInput.checked;
     // WHY: shading assist 会改变局部曲面和 TPS mesh，刷新后必须重新提交 tattoo 状态给 Pixi。
     // TRADE-OFF: 开关时多一次 tattoo state 提交，但避免 shader/geometry 继续使用旧 warpMesh。
-    refreshTattooWarpAndRenderTattoo(
-      () => refreshLocalSurface(state, elements, pixi),
-      () => renderTattoo(state, pixi),
-    );
+    refreshLocalSurfaceForTattooRender(state, elements, pixi);
   });
 
   for (const input of [elements.paramX, elements.paramY, elements.paramScale, elements.paramRotation]) {
@@ -377,7 +376,11 @@ function renderBodySurface(state: AppState, pixi: PixiTattooRenderer): void {
   pixi.setBodyAnalysisDebug(state.bodySurfaceState.analysisDebug);
 }
 
-function refreshLocalSurface(state: AppState, elements: AppElements, pixi: PixiTattooRenderer): void {
+function refreshLocalSurface(
+  state: AppState,
+  elements: SurfaceStatusElements,
+  pixi: Pick<PixiTattooRenderer, "setSurfaceNormalTexture">,
+): void {
   if (!state.tattooAsset) {
     state.tattooWarpMesh = null;
     replaceSurfaceNormalTexture(state, pixi, null);
@@ -431,7 +434,7 @@ function installDebugAndResetControls(
   });
 }
 
-function renderTattoo(state: AppState, pixi: PixiTattooRenderer): void {
+function renderTattoo(state: AppState, pixi: Pick<PixiTattooRenderer, "clearTattoo" | "setTattoo">): void {
   const tattooState = createTattooRenderState(state);
   if (!tattooState) {
     pixi.clearTattoo();
@@ -464,6 +467,17 @@ export function refreshTattooWarpAndRenderTattoo(
   renderCurrentTattoo();
 }
 
+export function refreshLocalSurfaceForTattooRender(
+  state: AppState,
+  elements: SurfaceStatusElements,
+  pixi: TattooSurfaceRefreshRenderer,
+): void {
+  refreshTattooWarpAndRenderTattoo(
+    () => refreshLocalSurface(state, elements, pixi),
+    () => renderTattoo(state, pixi),
+  );
+}
+
 function getTattooBounds(size: Size, transform: TattooTransform): Rect {
   const width = size.width * transform.scale;
   const height = size.height * transform.scale;
@@ -475,7 +489,7 @@ function getTattooBounds(size: Size, transform: TattooTransform): Rect {
   };
 }
 
-function refreshSurfaceStatus(state: AppState, elements: AppElements): void {
+function refreshSurfaceStatus(state: AppState, elements: SurfaceStatusElements): void {
   const debug = state.bodySurfaceState.analysisDebug;
   if (!debug) {
     return;
@@ -541,7 +555,7 @@ function syncPanelFromTransform(state: AppState, elements: AppElements): void {
 
 function replaceSurfaceNormalTexture(
   state: AppState,
-  pixi: PixiTattooRenderer,
+  pixi: Pick<PixiTattooRenderer, "setSurfaceNormalTexture">,
   nextTexture: Texture | null,
 ): void {
   const previousTexture = state.bodySurfaceState.surfaceNormalTexture;

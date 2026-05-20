@@ -10,6 +10,7 @@ import {
   formatTpsWarpStatusSuffix,
   mapSkinMeshToPlacementRect,
   normalizeSkinMeshImageSize,
+  refreshLocalSurfaceForTattooRender,
   refreshTattooWarpAndRenderTattoo,
 } from "../src/app";
 import type { BodyMeshPipelineParams, SkinMeshData, TattooWarpMeshData } from "../src/domain/types";
@@ -129,6 +130,32 @@ describe("refreshTattooWarpAndRenderTattoo", () => {
   });
 });
 
+describe("refreshLocalSurfaceForTattooRender", () => {
+  test("rebuilds TPS warp before Pixi receives tattoo state", () => {
+    const contextSpy = installCanvasContextStub();
+    const statusLabel = document.createElement("div");
+    const state = createRefreshIntegrationState();
+    const pixi = {
+      setSurfaceNormalTexture: vi.fn(),
+      setTattoo: vi.fn(),
+      clearTattoo: vi.fn(),
+    };
+
+    try {
+      refreshLocalSurfaceForTattooRender(state, { statusLabel }, pixi);
+    } finally {
+      contextSpy.mockRestore();
+    }
+
+    expect(state.tattooWarpMesh).not.toBeNull();
+    expect(state.tattooWarpMesh?.stats.maxDisplacementPx).toBeGreaterThan(10);
+    expect(pixi.setTattoo).toHaveBeenCalledWith(expect.objectContaining({
+      warpMesh: state.tattooWarpMesh,
+    }));
+    expect(statusLabel.textContent).toContain("TPS warp");
+  });
+});
+
 describe("computeContainPlacementRect", () => {
   test("fits image inside stage with centered letterboxing", () => {
     const rect = computeContainPlacementRect(
@@ -155,6 +182,77 @@ function createWarpMesh(maxDisplacementPx: number): TattooWarpMeshData {
       meanDisplacementPx: maxDisplacementPx / 2,
     },
   };
+}
+
+function createRefreshIntegrationState() {
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = 4;
+  sourceCanvas.height = 4;
+
+  return {
+    tattooTransform: {
+      x: 450,
+      y: 310,
+      scale: 1,
+      rotation: 0,
+      opacity: 0.9,
+    },
+    tattooAsset: {
+      texture: Texture.EMPTY,
+      size: { width: 100, height: 100 },
+      dataUrl: "data:image/png;base64,",
+      sourceCanvas,
+      fileName: "tattoo.png",
+      selectedMode: "original" as const,
+      cropRect: { x: 0, y: 0, width: 100, height: 100 },
+    },
+    tattooWarpMesh: null as TattooWarpMeshData | null,
+    transformRevision: 0,
+    shadingGeometryAssistEnabled: false,
+    bodySurfaceState: {
+      texture: Texture.EMPTY,
+      sourceCanvas,
+      fileName: "body.png",
+      surfaceNormalTexture: null,
+      placementRect: { x: 0, y: 0, width: 900, height: 620 },
+      sourceSize: { width: 900, height: 620 },
+      mask: {
+        width: 900,
+        height: 620,
+        probabilities: new Float32Array(900 * 620).fill(1),
+      },
+      mesh: {
+        positions: new Float32Array([
+          360, 200,
+          540, 200,
+          540, 420,
+          360, 420,
+        ]),
+        indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+        boundaryFlags: new Uint8Array([1, 1, 1, 1]),
+      },
+      pipelineParams: { ...defaultBodyMeshPipelineParams },
+      analysisDebug: null,
+      revision: 0,
+    },
+  };
+}
+
+function installCanvasContextStub() {
+  return vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((contextId: string) => {
+    if (contextId !== "2d") {
+      return null;
+    }
+
+    return {
+      createImageData: vi.fn((width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+      })),
+      putImageData: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+  }) as typeof HTMLCanvasElement.prototype.getContext);
 }
 
 describe("mapSkinMeshToPlacementRect", () => {
